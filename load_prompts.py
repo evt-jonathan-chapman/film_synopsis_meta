@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from synopses.extraction import ExtractionTask
+from extraction import ExtractionTask
 
 
 def load_tasks_from_yaml(path: str | Path) -> dict:

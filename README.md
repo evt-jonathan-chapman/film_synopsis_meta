@@ -1,1 +1,0 @@
-# film_synopsis_meta

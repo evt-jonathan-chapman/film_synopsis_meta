@@ -1,6 +1,6 @@
 from llama_cpp import Llama
 
-from synopses.models import MODELS
+from models import MODELS
 
 model = MODELS.get('llama-3.1')
 

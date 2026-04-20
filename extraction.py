@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Callable, Any
 import re
 import json
-from llama_cpp import Llama
 
 
 @dataclass
