@@ -1,0 +1,452 @@
+tasks:
+
+  is_franchise:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film franchise classification engine.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "is_franchise": boolean
+      }
+
+      Definition of "franchise":
+      - The film belongs to a multi-film series, shared universe, or long-running IP.
+      - Examples of franchises and universes:
+        - "Marvel", "DC", "Star Wars", "Ghost in the Shell", "Harry Potter",
+          "The Fast and the Furious", "James Bond", "The Lord of the Rings".
+
+      Evidence that it IS a franchise film can come from EITHER:
+      - the TITLE (mentions a known series name), OR
+      - the SYNOPSIS (mentions being part of a series or universe).
+
+      Examples:
+      - A film called "Ghost in the Shell 2: Innocence" is part of the
+        "Ghost in the Shell" franchise → is_franchise: true.
+      - A film called "Marvel Studios' The Fantastic Four: First Steps" is
+        part of the Marvel / Fantastic Four franchise → is_franchise: true.
+      - A one-off drama with no indication of a series or universe → is_franchise: false.
+
+      Rules:
+      - If the title clearly reuses a well-known series name, set "is_franchise": true.
+      - If the synopsis clearly says it takes place in an existing universe or is
+        part of a series, set "is_franchise": true.
+      - Otherwise, set "is_franchise": false.
+
+      - Base the decision ONLY on the title and synopsis.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  is_sequel:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film sequel classification engine.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "is_sequel": boolean
+      }
+
+      Definition of "sequel":
+      - The film continues the story of an earlier film in the same series.
+      - It is not just part of a universe, but a follow-up entry.
+
+      Use BOTH the title AND the synopsis.
+
+      Strong sequel cues in the TITLE:
+      - A number after the main title:
+        - "2", "3", "4", etc.
+        - Example: "Fantasy Movie 2"
+      - Roman numerals:
+        - "II", "III", "IV", "V"
+        - Example: "Action Film II"
+      - Phrases like:
+        - "Part 2", "Part II", "Chapter 2", "Chapter III"
+      - Titles with "Season 2", "Season 3", "Volume 2", "The Next Chapter",
+        "The Return" (if it clearly implies a continuation).
+
+      Sequel cues in the SYNOPSIS:
+      - Mentions of "sequel", "returns", "back again", "continuing the story of",
+        "following the events of", "picks up after the events of".
+
+      Rules:
+      - If the TITLE contains a clear part number or sequel phrasing (2, II, Part 2,
+        Chapter 2, etc.), set "is_sequel": true.
+      - If the SYNOPSIS explicitly says it is a sequel or continues an earlier story,
+        set "is_sequel": true.
+      - If neither the title nor the synopsis clearly indicate that it follows a
+        previous film, set "is_sequel": false.
+
+      - Do NOT guess sequels just because it is a franchise.
+        A first film in a franchise is not a sequel.
+      - Base the decision ONLY on the title and synopsis.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  characters:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 256
+    repeat_penalty: 1.1
+    postprocess: "clean_names"
+    system_prompt: |
+      You are a film NAME extraction engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "people": string[]
+      }
+
+      Definition:
+      - "people" here means ANY personal names appearing in the synopsis:
+        - character names
+        - real people in the story
+        - cast or crew names (actors, directors, musicians)
+      - A valid name usually a proper noun and has capitalised words like "Jun", "Bryon Widner", "Danielle Macdonald".
+
+      EXCLUDE Examples:
+        lifeguard, wife, husband, brother, sister, mother, father,
+        daughter, son, detective, cop, police, skinheads, terrorists,
+        nazis, teacher, student, foster mother, warrior, villain, hero,
+        weapons traffickers, orphan, child, children
+
+      EXCLUDE:
+      - generic roles
+      - groups or ideologies
+      - nicknames or object names like "Alarm Clock Bomber", "hell door"
+
+      Rules:
+      - Remove duplicates.
+      - If no valid names appear, return [].
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+  themes:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 192
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film theme extraction engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "themes": string[],
+      }
+
+      Definition of themes:
+      - 3-8 concise thematic concepts (1-4 words each).
+      - Examples: "family conflict", "redemption", "survival",
+        "identity", "grief", "moral ambiguity", "coming of age".
+
+      Rules:
+      - Base all values only on explicit clues in the title or synopsis.
+      - Themes must be conceptual, not sentences.
+      - Time periods must reflect the setting, not metaphors.
+      - When unsure about time period, return [].
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+  intellectual_property:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film intellectual property classification engine.
+
+      Given a film synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "intellectual_property": string[]
+      }
+
+      Definition of intellectual_property:
+      - Pre-existing franchises, universes, brands, or IP the film is clearly based on or continuing.
+      - Examples: "Marvel Cinematic Universe", "Spider-Man", "Harry Potter", "Star Wars", "James Bond".
+
+      EXCLUDE from intellectual_property:
+      - character names: "Peter Parker", "Sarah Chen", "Jun"
+      - actor/artist names: "Danielle Macdonald", "Jamie Bell", "Bruce Springsteen"
+      - one-off film titles that are not an established franchise (most standalone titles)
+      - album titles: "Nebraska" when used as an album, not a franchise
+      - generic nicknames or plot elements: "Alarm Clock Bomber", "hell door"
+      - generic concepts: "skinheads", "terrorists", "police", "the government"
+
+      Rules:
+      - If the film is clearly part of a famous franchise or universe, list the franchise names.
+      - If there is no clear evidence of known IP or franchise, use "intellectual_property": [].
+      - When uncertain, prefer an empty list.
+      - Output ONLY valid JSON. No explanations, no backticks.
+
+  genres:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 160
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film genre classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "genres": string[],
+        "subgenres": string[]
+      }
+
+      1) genres:
+         - 1-3 broad genres that best describe the film.
+         - Use common labels only, such as:
+           - "drama", "comedy", "romance", "action", "thriller",
+             "horror", "crime", "sci-fi", "fantasy", "animation",
+             "family", "war", "documentary", "biography".
+         - Do NOT invent niche or obscure labels here.
+         - If unsure, choose the closest reasonable genre.
+
+      2) subgenres:
+         - 0-4 more specific flavours of the story, such as:
+           - "psychological thriller", "romantic comedy", "coming-of-age",
+             "crime drama", "political thriller", "courtroom drama",
+             "supernatural horror", "period romance", "heist", "road movie".
+         - Subgenres should refine the broad genres, not contradict them.
+
+      3) Base all decisions ONLY on the title and synopsis.
+         Do not use outside knowledge.
+
+      Rules:
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  setting_time:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 192
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film setting and time-period extraction engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "setting_types": string[],
+        "time_periods": string[]
+      }
+
+      1) setting_types:
+         - 1-3 high-level labels describing WHERE the story takes place.
+         - Use simple phrases such as:
+           - "urban", "rural", "small town", "suburban",
+             "coastal town", "island community", "war zone",
+             "fantasy world", "dystopian future", "space", "post-apocalyptic",
+             "historical setting", "imaginary nation".
+         - Base this on the synopsis only.
+
+      2) time_periods:
+         - 0-3 labels describing WHEN the story is set.
+         - Use clear and readable descriptions:
+           - specific decades or eras: "1950s", "1960s", "Victorian era",
+             "World War II", "medieval era", "Viking age".
+           - broader terms: "present day", "near future", "distant future",
+             "timeless / unspecified".
+         - Only include time periods that are clearly suggested by the title or synopsis.
+           If the time is unclear, use an empty list [].
+
+      Rules:
+      - Do NOT guess exotic historical periods without evidence.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  protagonist_archetype:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 192
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film protagonist classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "protagonist_type": string,
+        "protagonist_archetypes": string[]
+      }
+
+      1) protagonist_type:
+         - A single label describing the main focus of the story:
+           - "individual"
+           - "duo"
+           - "family"
+           - "ensemble"
+           - "group"
+         - Choose the best fit based on the synopsis.
+
+      2) protagonist_archetypes:
+         - 1-3 concise labels describing the kind of protagonist.
+         - Use short phrases such as:
+           - "reluctant hero", "outsider", "anti-hero", "investigator",
+             "survivor", "ordinary person in crisis", "tragic figure",
+             "mentor", "rebellious youth", "idealistic activist".
+         - Base this only on what the synopsis actually says.
+
+      Rules:
+      - Do not list character names here, only archetypes.
+      - If the synopsis is very unclear, use:
+           "protagonist_type": "ensemble"
+           "protagonist_archetypes": []
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  conflict_type:
+    enabled: false
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 160
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film conflict classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "primary_conflict_types": string[]
+      }
+
+      Choose 1-3 labels from the classic conflict categories:
+
+      - "person vs person"       (e.g. hero vs villain, family conflict)
+      - "person vs self"         (internal struggle, guilt, addiction)
+      - "person vs society"      (oppression, systemic injustice, social norms)
+      - "person vs nature"       (survival against environment, disasters)
+      - "person vs technology"   (AI, machines, uncontrolled tech)
+      - "person vs supernatural" (ghosts, demons, curses, magic)
+      - "person vs fate"         (destiny, prophecy, inevitability)
+
+      Rules:
+      - Base the conflicts on the synopsis only.
+      - Use the smallest set of labels that reasonably describe the main conflict.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  tone:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film tone classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "tone": string[]
+      }
+
+      Select 1-3 concise tone descriptors that best match the overall feel of the story.
+
+      Use short labels, examples include this kind of vocabulary:
+      - "dark", "bleak", "grim"
+      - "lighthearted", "playful", "whimsical"
+      - "gritty", "realistic"
+      - "suspenseful", "tense"
+      - "emotional", "poignant"
+      - "uplifting", "hopeful"
+      - "satirical", "ironic"
+      - "mysterious", "eerie"
+
+      Rules:
+      - Base all tone decisions on the synopsis only.
+      - Do NOT use long sentences. Each item must be a short phrase (1-3 words).
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  language_cues:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 160
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film language and cultural cue detector.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "language_cues": string[]
+      }
+
+      "language_cues" should capture the likely primary language(s) or cultural origins
+      suggested by names, locations, and context in the synopsis.
+
+      Examples of possible values:
+      - "English (US)", "English (UK)", "English (Australia)", "English (New Zealand)",
+      - "Korean", "Japanese", "French", "German", "Italian", "Spanish"
+      - "Scandinavian", "Indian", "Middle Eastern", "Latin American"
+
+      Rules:
+      - Use 0-3 items.
+      - Only return valid languages
+      - If the synopsis clearly uses or references a specific language or cultural context,
+        include an appropriate cue.
+      - If the origin is unclear or strongly mixed, you may return an empty list [].
+      - Base all decisions only on the title and synopsis. Do NOT use outside knowledge.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+
+  primary_audience:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film audience classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "primary_audience": string,
+        "secondary_audiences": string[]
+      }
+
+      1) primary_audience:
+         - A single best-fit label describing who the film is mainly aimed at:
+           - "children"
+           - "family"
+           - "teen"
+           - "adult"
+           - "mature adult"   (for strong themes or content)
+           - "senior"
+
+      2) secondary_audiences:
+         - 0-3 additional audience segments that may also be suitable.
+         - Select a different label from primary_audience if relevant.
+
+      Rules:
+      - Base this ONLY on the tone and content suggested by the synopsis
+        (e.g. level of violence, complexity, subject matter).
+      - If the film clearly has heavy or disturbing content, "adult" or "mature adult"
+        is more appropriate than "family".
+      - Output ONLY valid JSON. No explanations. No backticks.
