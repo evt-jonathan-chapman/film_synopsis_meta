@@ -1,0 +1,13 @@
+snowflake:
+    warehouse: "AA_M_WH"
+    database:  "EDW_ENT_PRD"
+    schema:    "CURATED"
+    rsa_key:   "/Users/jonathanchapman/Documents/git/rsa_key.p8"
+
+paths:
+    main_dir:  "/Users/jonathanchapman/Documents/data"
+    sql_path:  "/Users/jonathanchapman/Documents/git/evt_back_up/sql"
+    three_d_sql:          "is_three_d.sql"
+    synopsis_look_up_sql: "synopsis_look_up.sql"
+    synopsis_dir: "synopsis_v2"
+    cast_dir:     "cast_meta"

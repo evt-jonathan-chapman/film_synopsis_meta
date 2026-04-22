@@ -7,7 +7,6 @@ import pandas as pd
 from dotenv import load_dotenv
 import sys
 
-
 sys.path.insert(0, "/Users/jonathanchapman/Documents/git/evt_back_up/base")
 
 from base_snowflake import SnowFlakeBase
@@ -17,23 +16,19 @@ litellm.success_callback = list()
 litellm.failure_callback = list()
 # Suppress verbose stdout (provider list warnings for unrecognised models, etc.)
 litellm.suppress_debug_info = True
-litellm.set_verbose = False
+litellm.set_sverbose = False
 
 from extractor import LlmJsonExtractor
 from models import MODELS, DEFAULT_MODEL, DEFAULT_FALLBACKS
 from load_prompts import load_tasks_from_yaml
-from config import SYNOPSES_EXTRACTED_PATH
+from config import SYNOPSES_EXTRACTED_PATH, SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY
 from films.main import get_films_sources
 from films import sql
 
+sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
+sb.create_snowflake_connection(SF_RSA_KEY)
 
-private_key_path = "/Users/jonathanchapman/Documents/git/rsa_key.p8"
-sb = SnowFlakeBase(warehouse="AA_M_WH", database="EDW_ENT_PRD", schema="CURATED")
-sb.create_snowflake_connection(private_key_path)
-
-
-sb.
-
+df_films = sb.return_query_output(sql.SQL_FILM_DETAILS)
 
 sample_size: int = 100
 sample_head: bool = True
@@ -43,7 +38,7 @@ load_dotenv()
 api_key = os.getenv('OPENAI_KEY')
 
 model_cfg = MODELS.get(DEFAULT_MODEL)
-tasks = load_tasks_from_yaml(Path("prompts.yaml"))
+tasks = load_tasks_from_yaml(Path("prompts/prompts.yaml"))
 
 df_new = df_films.loc[df_films['synopsis'].str.len() >= 5].copy(deep=True)
 
@@ -69,9 +64,9 @@ else:
 
 print(f'Input | Imported: {len(df_films)} | Synopsis > 5: {len(df_new)} | New: {len(df_new_diff)} | Sampled {len(df_sampled)}')
 
-if df_sampled.empty:
-    print('No new titles with valid synopses found')
-    return
+# if df_sampled.empty:
+#     print('No new titles with valid synopses found')
+#     return
 
 print(f'Extracting meta from {len(df_sampled)} titles using {model_cfg["model"]} (fallback: {DEFAULT_FALLBACKS[0]["model"]})')
 

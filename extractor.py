@@ -339,6 +339,7 @@ class LlmJsonExtractor:
         task_names: Iterable[str] | None = None,
         flatten: bool = True,
         max_concurrency: int = 20,
+        min_synopsis_len: int = 5,
     ) -> dict[str, dict[str, Any]]:
         """
         Async version of run_multiple_synopses for API providers.
@@ -353,7 +354,8 @@ class LlmJsonExtractor:
         completed = 0
         valid_rows = [
             row for row in df.itertuples(index=False)
-            if isinstance(getattr(row, synopsis_col), str) and len(str(getattr(row, synopsis_col))) >= 5
+            if isinstance(getattr(row, title_col), str) and len(str(getattr(row, title_col))) >= 1
+            and (min_synopsis_len == 0 or (isinstance(getattr(row, synopsis_col), str) and len(str(getattr(row, synopsis_col))) >= min_synopsis_len))
         ]
         total = len(valid_rows)
 

@@ -29,7 +29,7 @@ from load_prompts import load_tasks_from_yaml
 from extractor import LlmJsonExtractor
 from models import MODELS
 
-PROMPTS_PATH = Path('synopses', 'prompts.yaml')
+PROMPTS_PATH = Path('prompts', 'prompts.yaml')
 OUTPUT_PATH = Path('synopses', 'outputs', 'model_comparison.xlsx')
 
 LIST_FIELDS = [

@@ -1,0 +1,582 @@
+# prompts_v2.yaml
+#
+# Changes vs prompts.yaml:
+#   DISABLED:  characters (people_mapped embeddings weak vs Snowflake cast data)
+#   DISABLED:  themes     (theme embeddings don't separate d9/d5 in feature selection)
+#   DISABLED:  setting_time (setting_types + time_periods not used in model at all)
+#   DISABLED:  conflict_type (was already disabled)
+#   REWRITTEN: is_sequel — broadened to cover remakes, reboots, franchise continuations
+#   REWRITTEN: intellectual_property — captures novels, classic lit, not just fictional franchises
+#   REWRITTEN: genres — dropped subgenres (not in model), added animation + biography rules
+#   REWRITTEN: protagonist_archetype — simplified to protagonist_type only (archetypes not in model)
+#   REWRITTEN: primary_audience — broadened "family" definition
+#   NEW:       ip_strength — direct extraction replacing EncHelper.infer_ip_strength()
+#   NEW:       adaptation_type — direct extraction replacing EncHelper.infer_adaptation_type()
+#   NEW:       narrative_scope — epic/moderate/intimate (helps distinguish blockbusters from wide-release indies)
+
+tasks:
+
+  # ── UNCHANGED ──────────────────────────────────────────────────────────────
+
+  is_franchise:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film franchise classification engine.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "is_franchise": boolean
+      }
+
+      Definition of "franchise":
+      - The film belongs to a multi-film series, shared universe, or long-running IP.
+      - A franchise film is one where the TITLE or SYNOPSIS explicitly states it is
+        part of a named series or universe — not merely because you recognise the name.
+
+      Evidence that it IS a franchise film must come from EITHER:
+      - the TITLE (contains a series name AND a sequel/instalment marker), OR
+      - the SYNOPSIS (explicitly says the film is part of a named series or universe).
+
+      Examples (fictional):
+      - Title: "Stormwatch Chronicles 3"
+        Synopsis: "The third entry in the Stormwatch Chronicles series..."
+        → is_franchise: true  (title has series name + number; synopsis confirms it)
+      - Title: "Iron Vanguard: Rise of the Alliance"
+        Synopsis: "...the heroes of the Vanguard Universe must unite..."
+        → is_franchise: true  (synopsis explicitly names a universe)
+      - Title: "The Return"
+        Synopsis: "A woman goes back to her hometown after years away."
+        → is_franchise: false  (no series name, no universe mentioned)
+      - Title: "Roundup Squad"
+        Synopsis: "An elite task force pursues a crime syndicate across three cities."
+        → is_franchise: false  (no series marker in title or synopsis)
+
+      Rules:
+      - The TITLE alone is only sufficient evidence if it contains BOTH a recognisable
+        series name AND a clear instalment marker (number, Part N, Chapter N, etc.).
+      - A title with a generic word like "Returns", "Rising", or "Reborn" is NOT
+        sufficient on its own — the synopsis must confirm a named series.
+      - If the synopsis does NOT use words like "series", "universe", "franchise",
+        "instalment", or "part of", set "is_franchise": false.
+      - Do NOT infer franchise status from your external knowledge of real films.
+        Base the decision ONLY on what the provided title and synopsis text say.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  language_cues:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 160
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film language and cultural cue detector.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "language_cues": string[]
+      }
+
+      "language_cues" should capture the likely primary language(s) or cultural origins
+      suggested by names, locations, and context in the synopsis.
+
+      Examples of possible values:
+      - "English (US)", "English (UK)", "English (Australia)", "English (New Zealand)",
+      - "Korean", "Japanese", "French", "German", "Italian", "Spanish"
+      - "Scandinavian", "Indian", "Middle Eastern", "Latin American"
+
+      Rules:
+      - Use 0-3 items.
+      - Only return valid languages.
+      - If the synopsis clearly uses or references a specific language or cultural context,
+        include an appropriate cue.
+      - If the origin is unclear or strongly mixed, you may return an empty list [].
+      - Base all decisions only on the title and synopsis. Do NOT use outside knowledge.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  # ── REWRITTEN ──────────────────────────────────────────────────────────────
+
+  is_sequel:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film continuation classifier.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "is_sequel": boolean
+      }
+
+      Set "is_sequel": true for ANY of the following:
+
+      1. DIRECT SEQUELS — the film continues the story of an earlier film:
+         - Title contains a number, Roman numeral, or part marker:
+           "2", "3", "II", "Part 2", "Chapter 2", "Volume 2"
+         - Synopsis explicitly says "sequel", "returns", "picks up after",
+           "following the events of", "continuing the story of"
+
+      2. PREQUELS — set BEFORE the events of an earlier film:
+         - Synopsis says "prequel", "origin story of [named franchise character]",
+           "before the events of [named film]"
+
+      3. REBOOTS — a new version of a dormant film franchise:
+         - Synopsis or title explicitly uses "reboot", "reimagining", or
+           "new take on the [named franchise]"
+         - Synopsis says "based on the [year] film" or "inspired by the [year] original"
+
+      4. REMAKES — a new version of a specific prior film:
+         - Synopsis says "remake of", "based on the [year] film",
+           "retelling of the [named film]", "reimagining of the classic [named film]"
+
+      5. FRANCHISE / SERIES CONTINUATIONS — the film continues characters or a universe
+         from prior films without necessarily being numbered:
+         - Synopsis mentions "returning characters" from a named prior film or series
+         - Title contains a named franchise PLUS a subtitle (not a number) AND the
+           synopsis establishes the characters existed in a prior story
+
+      6. TV/STREAMING CONTINUATIONS brought to cinema:
+         - Synopsis says "continuation of the [named series]", "following the events
+           of the [named show]", "the next chapter of the [named franchise]"
+
+      Set "is_sequel": false for:
+      - Re-releases, restorations, remasters, anniversary screenings, director's cuts
+      - A film whose title contains "Returns" or "The Return" but whose synopsis
+        describes a character returning home — not a film continuation
+      - A first entry in a franchise (even if a franchise is established, the FIRST
+        film is not a sequel)
+      - Concert films or documentaries about an artist, even if part of a series
+
+      Rules:
+      - Use BOTH the title AND the synopsis.
+      - Base the decision only on what the title and synopsis explicitly state.
+        You MAY use your knowledge of well-known franchises to confirm whether a named
+        title is a continuation — but only when the synopsis also provides supporting
+        context (returning characters, shared universe, etc.).
+      - When uncertain, prefer false.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  intellectual_property:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film intellectual property classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "intellectual_property": string[]
+      }
+
+      "intellectual_property" lists the names of pre-existing works or franchises that
+      this film is directly based on or belongs to.
+
+      INCLUDE:
+      - Named fictional franchises or universes the film is part of:
+        e.g. "Marvel Cinematic Universe", "Star Wars"
+      - Named novels or book series the film adapts:
+        e.g. "The Martian" (Andy Weir novel), "Dune" (Herbert series)
+      - Classic literary works the film adapts:
+        e.g. "Wuthering Heights" (Brontë), "Romeo and Juliet" (Shakespeare)
+      - Named stage musicals the film adapts:
+        e.g. "Wicked", "Hamilton", "Les Misérables"
+      - Named comic book series or characters the film is part of:
+        e.g. "Spider-Man", "Batman"
+      - Named video games the film adapts:
+        e.g. "Minecraft", "The Last of Us"
+      - A specific prior film that this film is a remake or reboot of:
+        e.g. "Anaconda (1997)", "The Housemaid (2010)"
+
+      EXCLUDE:
+      - The film's own title — a film is never its own IP
+      - Biographical subjects: a biopic about "Elvis Presley" does not make Elvis an IP
+      - Performers or subjects of concert films / documentaries
+      - Character names alone without a franchise name: "Peter Parker" without "Spider-Man"
+      - Real-world places, people, cultural traditions, or generic plot elements
+      - Original screenplays with no pre-existing source material
+
+      Rules:
+      - List the canonical name of the source work or franchise, not a description.
+      - You may use your knowledge of well-known source material (novels, classics, stage
+        musicals, prior films) — you are not limited to text in the synopsis alone.
+      - If there is no clear pre-existing source material, return [].
+      - When uncertain, return [].
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  genres:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film genre classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "genres": string[]
+      }
+
+      Select 1-3 broad genres from this list only:
+        "drama", "comedy", "romance", "action", "thriller", "horror", "crime",
+        "sci-fi", "fantasy", "animation", "family", "war", "documentary",
+        "biography", "music", "musical", "adventure", "mystery", "sport",
+        "concert", "western", "historical"
+
+      Key rules:
+      - Use "animation" if the film features animated characters or is clearly an
+        animated production (cartoon characters, CGI animated animals, animated world).
+        Animation can appear alongside other genres (e.g. ["animation", "family", "comedy"]).
+      - Use "biography" (NOT "documentary") when the film tells the life story of a
+        real person in a narrative form — even if the person is famous.
+        Reserve "documentary" for non-narrative factual films with no dramatised story.
+      - Use "musical" when characters sing and the music is central to the narrative.
+        Use "music" when the film is about the music industry or a musician's life
+        but characters do not perform musical numbers as part of the story.
+      - Use "concert" for concert films or filmed live performances with minimal narrative.
+      - Use "family" only as a genre when the story is specifically written FOR a
+        family or children's audience — not just because a film is broadly suitable
+        for all ages. Superhero and blockbuster films are NOT "family" as a genre
+        unless the synopsis clearly frames them as children's or family entertainment.
+      - Do NOT use "documentary" for biopics, music biopics, or narrative films
+        about real events. Only use it for observational, journalistic, or
+        non-dramatised factual films.
+
+      Base all decisions ONLY on the title and synopsis.
+      Output ONLY valid JSON. No explanations. No backticks.
+
+
+  protagonist_archetype:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film protagonist classifier.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "protagonist_type": string
+      }
+
+      Choose EXACTLY ONE of these values:
+        "individual"  — the story follows a single main character
+        "duo"         — the story follows two main characters equally
+        "family"      — the story centres on a family unit
+        "ensemble"    — the story follows a group of characters with roughly equal focus
+        "group"       — the story follows a team or collective with a clear leader
+
+      Rules:
+      - If the synopsis gives insufficient character detail, use "ensemble".
+      - Base the decision ONLY on the synopsis.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  primary_audience:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film audience classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "primary_audience": string,
+        "secondary_audiences": string[]
+      }
+
+      1) primary_audience — single best-fit label:
+         - "children"     — content made specifically for young children (under 10)
+         - "family"       — content made for mixed-age family groups, including children
+                            AND adults together. Applies to: animated family films,
+                            superhero films with broad age appeal, blockbuster adventure
+                            films that parents and children enjoy together. If the synopsis
+                            features heroic characters, adventure, and spectacle without
+                            heavy violence, darkness, or mature themes, lean toward "family".
+         - "teen"         — primarily targets teenagers; coming-of-age, YA adaptations
+         - "adult"        — general adult audience; moderate themes, no children's content
+         - "mature adult" — strong, disturbing, or explicit content; not suitable for
+                            younger audiences (graphic violence, sexual content, heavy trauma)
+         - "senior"       — content aimed at older adults (nostalgia, slower pace, life reflection)
+
+      2) secondary_audiences — 0-3 additional segments who would also watch this:
+         - Choose from the same labels as primary_audience.
+         - Do not repeat the primary_audience label.
+
+      Rules:
+      - A superhero, blockbuster action-adventure, or animated fantasy film aimed at a
+        broad audience should be "family" — not "adult" — unless the synopsis describes
+        explicitly dark, violent, or adult themes.
+      - "mature adult" is only for films with graphic violence, sexual content, or very
+        heavy adult themes explicitly described in the synopsis.
+      - Base this ONLY on the tone and content described in the synopsis.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  tone:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 128
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film tone classification engine.
+
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+
+      {
+        "tone": string[]
+      }
+
+      Select 1-3 concise tone descriptors that best match the overall feel of the story.
+
+      Use short labels, examples include this kind of vocabulary:
+      - "dark", "bleak", "grim"
+      - "lighthearted", "playful", "whimsical"
+      - "gritty", "realistic"
+      - "suspenseful", "tense"
+      - "emotional", "poignant"
+      - "uplifting", "hopeful"
+      - "satirical", "ironic"
+      - "mysterious", "eerie"
+      - "spectacular", "epic", "bombastic"
+
+      Rules:
+      - Base all tone decisions on the synopsis only.
+      - Do NOT use long sentences. Each item must be a short phrase (1-3 words).
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  # ── NEW TASKS ──────────────────────────────────────────────────────────────
+
+  ip_strength:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film intellectual property strength classifier.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "ip_strength": string
+      }
+
+      Classify the strength of the pre-existing IP (intellectual property) that the film
+      is based on or belongs to. This measures how well-known and commercially powerful
+      the source material is to a mainstream cinema audience.
+
+      Use EXACTLY ONE of these values:
+
+      "iconic"   — The IP is globally recognised and drives ticket sales on name alone.
+                   Examples: Marvel/DC superhero franchises, Star Wars, Harry Potter,
+                   Disney Princess films, Shakespeare plays, Dickens or Brontë classics,
+                   long-running blockbuster franchises with proven box office history.
+                   Also applies to: sequels or remakes of films that were themselves
+                   massive global box office hits.
+
+      "strong"   — Well-known to the target audience and provides a meaningful commercial
+                   boost, but not universally famous.
+                   Examples: bestselling contemporary novel adaptations (Andy Weir, John
+                   Grisham, Stephen King), acclaimed foreign films being remade, established
+                   mid-tier film franchises (3rd+ entry, consistent fanbase), popular
+                   stage musicals, reboots of films with a strong cult following.
+
+      "moderate" — Niche or cult-level recognition. Provides some commercial signal but
+                   limited mainstream awareness.
+                   Examples: lesser-known book adaptations, indie comic book characters,
+                   obscure franchise reboots, films loosely inspired by a real event.
+
+      "none"     — Original screenplay, or the source material is so obscure it provides
+                   no meaningful commercial IP signal. Also use for:
+                   - Concert films and documentaries about real artists or events
+                     (the artist's fame is captured separately, not as IP strength)
+                   - Biopics where the person's life story itself is not a pre-existing
+                     fictional franchise
+
+      Rules:
+      - You MAY use your knowledge of well-known franchises, authors, and source material
+        to assess IP strength — you are not limited to the synopsis text alone.
+      - When in doubt between two adjacent levels, choose the lower one.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  adaptation_type:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film adaptation classifier.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "adaptation_type": string
+      }
+
+      Choose EXACTLY ONE value that best describes the origin of the film's story:
+
+      "original"           — Original screenplay; not based on any pre-existing work.
+
+      "novel"              — Based on a contemporary published novel or novella
+                             (written within roughly the last 60 years).
+
+      "classic_literature" — Based on a classic literary work widely regarded as part
+                             of the literary canon (typically 60+ years old, e.g.
+                             Brontë, Austen, Dickens, Shakespeare, Tolstoy, Fitzgerald).
+
+      "comic_book"         — Based on a comic book, graphic novel, or comic strip.
+
+      "video_game"         — Based on a video game franchise.
+
+      "stage_musical"      — Based on a stage musical production.
+
+      "remake"             — A new version of a specific prior film, retelling the same
+                             story with new cast/direction.
+
+      "reboot"             — Restarts an established film franchise from the beginning
+                             with a new story or cast; not a direct remake of one film.
+
+      "biopic"             — A narrative dramatisation of a real person's life.
+
+      "true_story"         — Based on real events but not primarily about one person's
+                             life (historical drama, true crime, disaster film).
+
+      "concert_film"       — A filmed concert performance or music event with minimal
+                             narrative framing.
+
+      "documentary"        — Non-fiction observational or journalistic film.
+
+      Rules:
+      - Choose the SINGLE best-fitting type. If a film is a remake of a stage musical,
+        prefer "remake" over "stage_musical" since the immediate source is the prior film.
+        If a film is based on a novel that was previously filmed, prefer "novel".
+      - You MAY use your knowledge of well-known source material to classify correctly.
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  narrative_scope:
+    enabled: true
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 64
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film narrative scope classifier.
+
+      Given a film TITLE and SYNOPSIS, output ONLY a JSON object with this schema:
+
+      {
+        "narrative_scope": string
+      }
+
+      Classify the physical and dramatic scale of the story. This is about the SIZE of
+      the world the film inhabits, not its emotional depth.
+
+      Use EXACTLY ONE of these values:
+
+      "epic"      — Large-scale, world-spanning or universe-spanning story.
+                   Indicators: multiple countries or worlds, armies or civilisations,
+                   world-ending or universe-altering stakes, large ensemble of heroes
+                   facing a global or cosmic threat, spectacular large-scale action or
+                   battle sequences described in the synopsis.
+                   Examples: superhero films saving the world, space operas, war epics,
+                   disaster films threatening all of humanity.
+
+      "moderate"  — Standard studio scale. The stakes are meaningful to the characters
+                   and community but not world-ending. Most crime thrillers, dramas,
+                   horror films, and comedies fall here. A city may be threatened but
+                   not the whole world. One family, organisation, or community is at stake.
+
+      "intimate"  — Small-scale, personal story. Limited locations (one town, one house,
+                   one night). Few characters. Stakes are personal or local — a
+                   relationship, a single decision, a family conflict, a personal journey.
+                   Indicators: character study language ("one woman's journey",
+                   "a family torn apart"), single-location stories, slice-of-life.
+
+      Rules:
+      - Base the classification on the SCALE described in the synopsis, not on the
+        film's emotional intensity. A deeply emotional film can still be "intimate".
+      - If the synopsis is ambiguous, use "moderate".
+      - Output ONLY valid JSON. No explanations. No backticks.
+
+
+  # ── DISABLED ───────────────────────────────────────────────────────────────
+
+  characters:
+    enabled: false
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 256
+    repeat_penalty: 1.1
+    postprocess: "clean_names"
+    system_prompt: |
+      You are a film NAME extraction engine.
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+      { "people": string[] }
+      Extract personal names (character names, real people, cast/crew mentioned).
+      Exclude generic roles (detective, wife, etc.). Remove duplicates.
+      If no valid names appear, return [].
+      Output ONLY valid JSON. No explanations. No backticks.
+
+  themes:
+    enabled: false
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 192
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film theme extraction engine.
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+      { "themes": string[] }
+      Extract 3-8 concise thematic concepts (1-4 words each).
+      Output ONLY valid JSON. No explanations. No backticks.
+
+  setting_time:
+    enabled: false
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 192
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film setting and time-period extraction engine.
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+      { "setting_types": string[], "time_periods": string[] }
+      Output ONLY valid JSON. No explanations. No backticks.
+
+  conflict_type:
+    enabled: false
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 160
+    repeat_penalty: 1.1
+    system_prompt: |
+      You are a film conflict classification engine.
+      Given a film title and synopsis, output ONLY a JSON object with this schema:
+      { "primary_conflict_types": string[] }
+      Output ONLY valid JSON. No explanations. No backticks.
