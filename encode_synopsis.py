@@ -42,14 +42,12 @@ load_dotenv()
 ONE_HOT      = ["primary_audience", "protagonist_type", "adaptation_type",
                 "ip_strength", "language_group"]
 MULTI_HOT    = ["secondary_audiences", "genres"]
-EMBED        = ["tone", "themes", "people"]
+EMBED        = ["tone"]
 EMBED_MAPPED = [f"{x}_mapped" for x in EMBED]
 PASSTHROUGH  = ["is_sequel", "is_franchise", "is_ip", "has_english"]
 
 MULTI_VALUED_COLS = [
-    "people", "themes", "intellectual_property",
-    "subgenres", "protagonist_archetypes",
-    "tone", "setting_types", "language_cues", "time_periods",
+    "intellectual_property", "tone", "language_cues", "secondary_audiences", "genres",
 ]
 
 # ── Hard overrides ─────────────────────────────────────────────────────────────

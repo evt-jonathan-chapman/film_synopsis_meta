@@ -223,7 +223,7 @@ class EncHelper:
             return True
 
         ip_list  = EncHelper._to_list(row.intellectual_property)
-        people   = EncHelper._to_list(row.people)
+        people   = EncHelper._to_list(getattr(row, 'people', []))
         ip_text  = " ".join(ip_list).lower()
         ppl_text = " ".join(people).lower()
 
@@ -259,7 +259,7 @@ class EncHelper:
             return "none"
 
         ip_list  = EncHelper._to_list(row.intellectual_property)
-        people   = EncHelper._to_list(row.people)
+        people   = EncHelper._to_list(getattr(row, 'people', []))
         ip_text  = " ".join(ip_list).lower()
         ppl_text = " ".join(people).lower()
 
@@ -297,8 +297,9 @@ class EncHelper:
     def infer_adaptation_type(row):
         ip_text = " ".join(row.intellectual_property).lower() \
             if row.intellectual_property is not None and len(row.intellectual_property) > 0 else ""
-        subgenres_text = " ".join(row.subgenres).lower() \
-            if row.subgenres is not None and len(row.subgenres) > 0 else ""
+        subgenres = getattr(row, 'subgenres', None)
+        subgenres_text = " ".join(subgenres).lower() \
+            if subgenres is not None and len(subgenres) > 0 else ""
 
         stage_musicals = [
             "wicked", "les miserables", "hamilton", "cats", "phantom of the opera",
@@ -440,6 +441,8 @@ class EncHelper:
             idx_3d  = df.index[df[film_id_col] == id_3d][0]
             idx_std = df.index[df[film_id_col] == id_std][0]
             for col in list_cols:
+                if col not in df.columns:
+                    continue
                 merged = list(set(
                     to_list_safe(df.at[idx_3d, col]) +
                     to_list_safe(df.at[idx_std, col])

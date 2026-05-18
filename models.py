@@ -15,6 +15,13 @@ MODELS = {
         'cost_per_1m_input': 0.10,
         'cost_per_1m_output': 0.40,
     },
+    'gpt-5.4-mini': {
+        'provider': 'openai',
+        'model': 'gpt-5.4-mini',
+        # TODO: confirm pricing — placeholder values
+        'cost_per_1m_input': 0.25,
+        'cost_per_1m_output': 2.00,
+    },
 
     # Local llama-cpp models
     # phi-3.5: disqualified — parse failures + hallucinations (2026-04-10 comparison)
@@ -38,4 +45,4 @@ MODELS = {
 
 # Production defaults: smallest capable OpenAI model first, larger mini as fallback.
 DEFAULT_MODEL = 'gpt-4.1-nano'
-DEFAULT_FALLBACKS = [{'model': 'gpt-4o-mini'}]
+DEFAULT_FALLBACKS = [{'model': 'gpt-5.4-mini'}]

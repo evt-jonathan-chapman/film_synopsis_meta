@@ -293,10 +293,22 @@ class LlmJsonExtractor:
                 kwargs['api_key'] = self.api_key
             if self.api_base:
                 kwargs['api_base'] = self.api_base
-            if self.fallbacks:
-                kwargs['fallbacks'] = self.fallbacks
+            # NOTE: do NOT pass fallbacks here — litellm's fallback_utils intercepts
+            # RateLimitErrors and tries the fallback model, which shares the same org
+            # TPM limit and also fails, crashing before our retry loop runs.
+            # Fallbacks are only useful for model-down errors, not rate limits.
 
-            resp = await litellm.acompletion(**kwargs)
+            _max_retries = 8
+            _delay = 3.0
+            for _attempt in range(_max_retries):
+                try:
+                    resp = await litellm.acompletion(**kwargs)
+                    break
+                except litellm.exceptions.RateLimitError:
+                    if _attempt == _max_retries - 1:
+                        raise
+                    await asyncio.sleep(_delay)
+                    _delay = min(_delay * 2, 60.0)
             raw = resp.choices[0].message.content
 
             if self.token_usage is not None and resp.usage:

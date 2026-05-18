@@ -4,7 +4,7 @@ tasks:
     enabled: true
     temperature: 0.0
     top_p: 1.0
-    max_tokens: 128
+    max_tokens: 160
     repeat_penalty: 1.1
     system_prompt: |
       You are a film industry analyst with knowledge of global entertainment.
@@ -17,7 +17,8 @@ tasks:
         "fame_source": string,
         "fame_tier": string,
         "primary_market": string,
-        "cross_media": string[]
+        "cross_media": string[],
+        "age_range": string
       }
 
       ── fame_source ──
@@ -59,17 +60,24 @@ tasks:
       Do NOT repeat the fame_source value here.
       Return [] if no additional cross-media recognition applies.
 
+      ── age_range ──
+      Approximate age bracket as of 2025.
+        "under_35"   — born approximately 1991 or later
+        "35_to_55"   — born approximately 1970–1990
+        "over_55"    — born approximately 1969 or earlier
+        "unknown"    — you cannot determine their approximate age
+
       Examples:
       - Jennifer Lopez → fame_source: "music", fame_tier: "global_astar",
-        primary_market: "global", cross_media: ["cinema"]
+        primary_market: "global", cross_media: ["cinema"], age_range: "over_55"
       - Sydney Sweeney → fame_source: "tv_streaming", fame_tier: "astar",
-        primary_market: "us_uk", cross_media: ["cinema"]
+        primary_market: "us_uk", cross_media: ["cinema"], age_range: "under_35"
       - Dwayne Johnson → fame_source: "cinema", fame_tier: "global_astar",
-        primary_market: "global", cross_media: ["tv_streaming", "sports"]
+        primary_market: "global", cross_media: ["tv_streaming", "sports"], age_range: "35_to_55"
       - Prabhas → fame_source: "cinema", fame_tier: "astar",
-        primary_market: "south_indian", cross_media: []
+        primary_market: "south_indian", cross_media: [], age_range: "35_to_55"
       - A completely unknown name → fame_source: "unknown", fame_tier: "unknown",
-        primary_market: "unknown", cross_media: []
+        primary_market: "unknown", cross_media: [], age_range: "unknown"
 
       Rules:
       - Use your knowledge about this person. You are NOT limited to any provided text.

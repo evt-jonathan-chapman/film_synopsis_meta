@@ -22,6 +22,7 @@ import gc
 import glob
 import os
 from collections import Counter
+from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -34,7 +35,7 @@ load_dotenv()
 from extractor import LlmJsonExtractor
 from load_prompts import load_tasks_from_yaml
 from models import DEFAULT_MODEL, DEFAULT_FALLBACKS, MODELS
-from config import CAST_ENRICHED_PATH, RAW_PARQUET_GLOB
+from config import CAST_ENRICHED_PATH, RAW_PARQUET_GLOBS_ALL
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -186,7 +187,15 @@ async def main(actors_df: pd.DataFrame, sample_size: int = 0):
 # ── Run ────────────────────────────────────────────────────────────────────────
 # min_film_count=2 skips one-off actors to reduce cost.
 # sample_size=50 for a validation run; set to 0 for all actors.
+# RAW_PARQUET_GLOBS_ALL covers train + test + prediction sets so holdout
+# films and future-prediction films also have their actors enriched.
 
-actors_df = load_unique_actors(RAW_PARQUET_GLOB, min_film_count=2)
+_parts = [load_unique_actors(g, min_film_count=2) for g in RAW_PARQUET_GLOBS_ALL]
+actors_df = (
+    pd.concat(_parts, ignore_index=True)
+      .drop_duplicates("actor_name")
+      .reset_index(drop=True)
+)
+print(f"Combined actor universe (train+test+pred, min_film_count=2): {len(actors_df):,}")
 
 asyncio.run(main(actors_df, sample_size=50))
