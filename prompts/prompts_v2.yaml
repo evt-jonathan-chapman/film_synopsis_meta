@@ -370,8 +370,10 @@ tasks:
 
   # ── NEW TASKS ──────────────────────────────────────────────────────────────
 
+  # MIGRATED 2026-05-19 to film_meta_prompts.yaml::film_meta — that task now
+  # extracts ip_strength via web_search (more reliable on recent IP than nano).
   ip_strength:
-    enabled: true
+    enabled: false
     temperature: 0.0
     top_p: 1.0
     max_tokens: 64
@@ -424,8 +426,10 @@ tasks:
       - Output ONLY valid JSON. No explanations. No backticks.
 
 
+  # MIGRATED 2026-05-19 to film_meta_prompts.yaml::film_meta — that task now
+  # extracts adaptation_type via web_search (better recall on recent novels/remakes).
   adaptation_type:
-    enabled: true
+    enabled: false
     temperature: 0.0
     top_p: 1.0
     max_tokens: 64

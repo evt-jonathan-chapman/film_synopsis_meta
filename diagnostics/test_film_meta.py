@@ -20,6 +20,9 @@ import os
 import sys
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
+
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -39,7 +42,7 @@ TEST_FILM = {
     "rel_at":   "2025-02-04",
     "dstbtr":   "Lionsgate",
 }
-PROMPTS_PATH = "prompts/film_meta_prompts.yaml"
+PROMPTS_PATH = str(_REPO / 'prompts' / 'film_meta_prompts.yaml')
 OUT_PATH     = DATA_DIR / "film_meta" / "test_run.json"
 
 # ── Parse CLI overrides ───────────────────────────────────────────────────────

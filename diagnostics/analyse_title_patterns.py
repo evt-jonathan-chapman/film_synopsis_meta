@@ -16,14 +16,18 @@ Usage:
 """
 
 import re
+import sys
 from collections import Counter
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
 
 import pandas as pd
 
 from films.main import get_films_sources
 
-OUTPUT_PATH = Path('synopses', 'outputs', 'title_patterns.xlsx')
+OUTPUT_PATH = _REPO / 'synopses' / 'outputs' / 'title_patterns.xlsx'
 
 # ── Known pattern definitions ─────────────────────────────────────────────────
 # Each entry: (tag_name, list_of_regex_patterns)

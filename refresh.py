@@ -43,8 +43,14 @@ from extractor import LlmJsonExtractor
 from load_prompts import load_tasks_from_yaml
 from models import DEFAULT_MODEL, DEFAULT_FALLBACKS, MODELS
 from ingest import sync_synopses_sources
-from encode_synopsis import encode_synopsis_features
-from cast_encode import encode_cast_features
+
+# Encoding orchestration moved to cinema_admits_models (2026-05-19):
+#   build_data/encode_llm_features.py     — synopsis (replaces encode_synopsis.py)
+#   build_data/encode_cast_features.py    — cast (was cast_encode.py)
+#   build_data/encode_director_features.py — director (was director_encode.py)
+# The encoding step has been removed from this refresh script. Trigger encoding
+# from the box office model's pipeline after this script produces fresh raw
+# parquets.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -319,21 +325,12 @@ async def _run_refresh_async(
         except Exception as e:
             log.warning(f"Snowflake sync failed (non-fatal): {e}")
 
-    # ── 5. Encode synopsis features ──────────────────────────────────────────
-    if synopsis_updated or force_encode:
-        log.info("Re-encoding synopsis features...")
-        synopsis_out = encode_synopsis_features(out_date=out_date)
-        log.info(f"Synopsis features saved → {synopsis_out}")
-    else:
-        log.info("Synopsis encoding skipped — no changes")
-
-    # ── 6. Encode cast features ──────────────────────────────────────────────
-    if cast_updated or force_encode:
-        log.info("Re-encoding cast features...")
-        cast_out = encode_cast_features()
-        log.info(f"Cast features saved → {cast_out}")
-    else:
-        log.info("Cast encoding skipped — no changes")
+    # ── 5+6. Encoding ────────────────────────────────────────────────────────
+    # Encoding moved to cinema_admits_models/build_data/ (2026-05-19). This
+    # script now produces raw parquets only; trigger the box office model's
+    # encoders from its own pipeline after this refresh completes.
+    if synopsis_updated or cast_updated or force_encode:
+        log.info("Raw extraction complete — encoding deferred to box office model pipeline.")
 
     result = {
         'run_date':        out_date,

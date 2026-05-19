@@ -30,7 +30,7 @@ load_dotenv()
 sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
 
 from extractor import LlmJsonExtractor
-from film_meta_extractor import FilmMetaExtractor
+from film_meta_extractor import FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor
 from load_prompts import load_tasks_from_yaml
 from models import DEFAULT_MODEL, DEFAULT_FALLBACKS, MODELS
 from config import (
@@ -56,12 +56,12 @@ FILM_IDS = None
 SAMPLE_SIZE = 0          # 0 = all; N = first N films by release date
 
 RUN_SYNOPSIS  = False       # extract synopsis features via LLM
-RUN_CAST      = False      # enrich cast profiles via LLM
-RUN_DIRECTOR  = False      # enrich director profiles via LLM
+RUN_CAST      = True      # enrich cast profiles via LLM
+RUN_DIRECTOR  = True      # enrich director profiles via LLM
 RUN_META      = True      # web-grounded film_meta extraction (studios/cast/genres/budget/trailers)
-RUN_ENCODE    = True     # run encode_synopsis_features + encode_cast_features after extraction
+RUN_ENCODE    = False    # DEPRECATED 2026-05-19 — encoding moved to cinema_admits_models/build_data/encode_llm_features.py. The encode_*.py scripts have been moved to depreciated/encoding/. Leave False; flip True only for legacy reruns.
 
-MAX_CONCURRENCY = 8    # 8 concurrent × 11 tasks = ~88 requests/burst — stays under org TPM limit
+MAX_CONCURRENCY = 2   # 8 concurrent × 11 tasks = ~88 requests/burst — stays under org TPM limit
 BATCH_PAUSE_SECS = 3   # pause between 100-film batches to let the rate window reset
 MAX_COST_USD    = 20.00    # hard stop if cumulative spend exceeds this
 
@@ -280,34 +280,30 @@ async def enrich_cast(df_source: pd.DataFrame) -> float:
         print("Cast enrichment up to date.")
         return 0.0
 
-    df_actors = pd.DataFrame({'actor_name': new_actors, 'synopsis': ''})
-    tasks     = load_tasks_from_yaml(CAST_PROMPTS_PATH)
-    model_cfg = MODELS.get(DEFAULT_MODEL, {})
-    extractor = LlmJsonExtractor(
-        tasks=tasks,
-        model=DEFAULT_MODEL,
-        fallbacks=DEFAULT_FALLBACKS,
+    df_actors = pd.DataFrame({'actor_name': new_actors})
+    tasks         = load_tasks_from_yaml(CAST_PROMPTS_PATH)
+    cast_model    = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
+    cast_model_cfg = MODELS.get(cast_model, {})
+    extractor = ActorMetaExtractor(
+        task=tasks['actor_profile'],
+        model=cast_model,
         api_key=os.getenv('OPENAI_KEY'),
-        cost_per_1m_input=model_cfg.get('cost_per_1m_input'),
-        cost_per_1m_output=model_cfg.get('cost_per_1m_output'),
+        cost_per_1m_input=cast_model_cfg.get('cost_per_1m_input'),
+        cost_per_1m_output=cast_model_cfg.get('cost_per_1m_output'),
     )
 
     chunks = [df_actors.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_actors), BATCH_SIZE)]
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nCast batch {batch_num}/{len(chunks)}  ({len(chunk)} actors)")
-        results = await extractor.arun_multiple_synopses(
+        results = await extractor.arun(
             df=chunk,
-            id_col='actor_name',
-            title_col='actor_name',
-            synopsis_col='synopsis',
-            alt_synopsis_col=None,
-            flatten=True,
-            max_concurrency=MAX_CONCURRENCY,
-            min_synopsis_len=0,
+            name_col='actor_name',
+            max_concurrency=META_MAX_CONCURRENCY,
         )
 
         for actor_name, data in results.items():
             if not data.get('_error'):
+                data = {**data, 'actor_name': actor_name}
                 checkpoint[str(actor_name)] = data
 
         with open(CAST_CHECKPOINT_PATH, 'w') as f:
@@ -387,34 +383,30 @@ async def enrich_directors(df_source: pd.DataFrame) -> float:
         print("Director enrichment up to date.")
         return 0.0
 
-    df_directors = pd.DataFrame({'director_name': new_directors, 'synopsis': ''})
-    tasks     = load_tasks_from_yaml(DIRECTOR_PROMPTS_PATH)
-    model_cfg = MODELS.get(DEFAULT_MODEL, {})
-    extractor = LlmJsonExtractor(
-        tasks=tasks,
-        model=DEFAULT_MODEL,
-        fallbacks=DEFAULT_FALLBACKS,
+    df_directors = pd.DataFrame({'director_name': new_directors})
+    tasks         = load_tasks_from_yaml(DIRECTOR_PROMPTS_PATH)
+    dir_model     = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
+    dir_model_cfg = MODELS.get(dir_model, {})
+    extractor = DirectorMetaExtractor(
+        task=tasks['director_profile'],
+        model=dir_model,
         api_key=os.getenv('OPENAI_KEY'),
-        cost_per_1m_input=model_cfg.get('cost_per_1m_input'),
-        cost_per_1m_output=model_cfg.get('cost_per_1m_output'),
+        cost_per_1m_input=dir_model_cfg.get('cost_per_1m_input'),
+        cost_per_1m_output=dir_model_cfg.get('cost_per_1m_output'),
     )
 
     chunks = [df_directors.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_directors), BATCH_SIZE)]
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nDirector batch {batch_num}/{len(chunks)}  ({len(chunk)} directors)")
-        results = await extractor.arun_multiple_synopses(
+        results = await extractor.arun(
             df=chunk,
-            id_col='director_name',
-            title_col='director_name',
-            synopsis_col='synopsis',
-            alt_synopsis_col=None,
-            flatten=True,
-            max_concurrency=MAX_CONCURRENCY,
-            min_synopsis_len=0,
+            name_col='director_name',
+            max_concurrency=META_MAX_CONCURRENCY,
         )
 
         for name, data in results.items():
             if not data.get('_error'):
+                data = {**data, 'director_name': name}
                 checkpoint[str(name)] = data
 
         with open(DIRECTOR_CHECKPOINT_PATH, 'w') as f:
@@ -691,9 +683,13 @@ if _total_cost > MAX_COST_USD:
     print(f"WARNING: exceeded MAX_COST_USD cap of ${MAX_COST_USD:.2f}")
 
 if RUN_ENCODE:
-    from encode_synopsis import encode_synopsis_features
-    from cast_encode import encode_cast_features
-    from director_encode import encode_director_features
-    encode_synopsis_features()
-    encode_cast_features()
-    encode_director_features()
+    # cast/director encoders moved to cinema_admits_models/build_data/
+    # (encode_cast_features.py, encode_director_features.py) on 2026-05-19.
+    # encode_synopsis.py remains in depreciated/encoding/ — superseded by
+    # cinema_admits_models/build_data/encode_llm_features.py. Run those scripts
+    # from the box office model project instead.
+    raise RuntimeError(
+        "RUN_ENCODE is no longer supported in film_synopsis_meta. "
+        "Run cinema_admits_models/build_data/encode_llm_features.py, "
+        "encode_cast_features.py, and encode_director_features.py instead."
+    )

@@ -17,6 +17,9 @@ import re
 import sys
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
+
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -45,10 +48,10 @@ from config import (
 
 TARGET_IDS = [57603, 57343, 59530, 60336, 60261, 60560]  # Mandalorian, Michael, Housemaid, Hail Mary, Devil Wears Prada 2, Marty Supreme
 
-PROMPTS_V1        = Path('prompts/prompts.yaml')
-PROMPTS_V2        = Path('prompts/prompts_v2.yaml')
+PROMPTS_V1        = _REPO / 'prompts' / 'prompts.yaml'
+PROMPTS_V2        = _REPO / 'prompts' / 'prompts_v2.yaml'
 OUTPUT_PATH       = DATA_DIR / 'comparisons' / 'prompt_comparison.xlsx'
-CAST_PROMPTS_PATH = Path('prompts/cast_prompts.yaml')
+CAST_PROMPTS_PATH = _REPO / 'prompts' / 'cast_prompts.yaml'
 
 _AND_RE = re.compile(r'^AND\s+', re.IGNORECASE)
 

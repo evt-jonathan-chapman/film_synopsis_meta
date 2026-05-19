@@ -16,16 +16,18 @@ tasks:
       object matching this exact schema:
 
       {
-        "title":         string,
-        "release_date":  "YYYY-MM-DD" | null,
-        "director":      string | null,
-        "writers":       string[],
-        "genres":        string[],
-        "description":   string,
-        "budget_usd":    number | null,
-        "budget_source": string | null,
-        "studios":       [{ "order": int, "name": string, "role": string }],
-        "cast":          [{ "order": int, "actor": string, "character": string }]
+        "title":            string,
+        "release_date":     "YYYY-MM-DD" | null,
+        "director":         string | null,
+        "writers":          string[],
+        "genres":           string[],
+        "description":      string,
+        "budget_usd":       number | null,
+        "budget_source":    string | null,
+        "studios":          [{ "order": int, "name": string, "role": string }],
+        "cast":             [{ "order": int, "actor": string, "character": string }],
+        "ip_strength":      "iconic" | "strong" | "moderate" | "none",
+        "adaptation_type":  "original" | "novel" | "classic_literature" | "comic_book" | "video_game" | "stage_musical" | "remake" | "reboot" | "biopic" | "true_story" | "concert_film" | "documentary"
       }
 
       ── Field rules ──
@@ -55,14 +57,27 @@ tasks:
                       figure (Variety, Deadline, The Numbers, Box Office Mojo,
                       official press materials). Do NOT include marketing spend.
 
-      budget_source   Short citation for where the budget figure was found.
-                      MUST be a named industry publication: "Variety", "Deadline",
-                      "The Hollywood Reporter", "Box Office Mojo", "The Numbers",
-                      "Wikipedia (citing X)". DO NOT use aggregator sites,
-                      forums, fan wikis, or sites whose name you cannot
-                      independently verify (e.g. "Saturation.io" — reject).
-                      Return null for budget_source if you cannot point to a
-                      named industry publication, even if you have a figure.
+      budget_source   Short citation for where the budget figure was found, with
+                      a confidence marker. All budgets are estimates to some degree;
+                      we want them ball-park, not perfect. Accepted sources:
+                        - Industry trade press: "Variety", "Deadline",
+                          "The Hollywood Reporter", "Indiewire" — strongest signal.
+                        - Box office data sites: "Box Office Mojo", "The Numbers",
+                          "Box Office Pro" — reliable for released films.
+                        - "IMDb", "IMDbPro" — accept; widely used trade reference.
+                        - "Wikipedia (citing X)" — accept if Wikipedia attributes
+                          to a named source X.
+                        - "Studio press release" / "Producer interview" — accept if
+                          you can name the studio or publication carrying it.
+                      ALWAYS append a confidence marker in parentheses:
+                        (reported)            published final budget
+                        (pre-release estimate) trade-press estimate before release
+                        (industry estimate)   estimate from a non-trade source like IMDb
+                        (rumoured)            speculation only (still acceptable, marked)
+                      DO NOT use: anonymous forums, fan wikis, Reddit, unnamed blogs,
+                      or sites whose name you cannot independently identify. Return
+                      null only if you have no figure at all — partial sourcing is
+                      better than null.
 
       studios         List production companies FIRST in opening-credits order
                       (the "studio cards" shown at film start), THEN distributor(s).
@@ -73,6 +88,57 @@ tasks:
                       stop at order 5. character is the role name; if the role
                       hasn't been officially revealed for one of the top 5, use
                       "Undisclosed". Do NOT pad with lower-billed cast.
+
+      ip_strength     Strength of the pre-existing IP this film is based on or
+                      belongs to. EXACTLY ONE of:
+                        "iconic"   Globally recognised, drives ticket sales on name
+                                   alone. Marvel/DC franchises, Star Wars, Harry Potter,
+                                   Disney Princess films, Shakespeare/Brontë/Dickens
+                                   classics, long-running blockbuster franchises with
+                                   proven box office history. Also: sequels or remakes
+                                   of films that were themselves massive global hits.
+                        "strong"   Well-known to the target audience, meaningful
+                                   commercial boost but not universally famous.
+                                   Bestselling contemporary novel adaptations (Andy
+                                   Weir, John Grisham, Stephen King, Colleen Hoover),
+                                   acclaimed foreign films being remade, established
+                                   mid-tier franchises (3rd+ entry), popular stage
+                                   musicals, reboots with strong cult following.
+                        "moderate" Niche or cult-level recognition. Some commercial
+                                   signal but limited mainstream awareness. Lesser-known
+                                   book adaptations, indie comic characters, obscure
+                                   franchise reboots, films loosely inspired by real
+                                   events.
+                        "none"     Original screenplay, or source material so obscure
+                                   it provides no commercial IP signal. Also use for:
+                                   concert films and documentaries about real artists
+                                   (artist fame captured separately); biopics where
+                                   the subject is not a pre-existing fictional franchise.
+                      When uncertain between two adjacent levels, choose the lower.
+
+      adaptation_type EXACTLY ONE label for the origin of the film's story:
+                        "original"           Original screenplay; not based on
+                                             pre-existing work.
+                        "novel"              Contemporary published novel or novella
+                                             (written roughly within the last 60 years).
+                        "classic_literature" Classic literary work in the literary canon
+                                             (typically 60+ years old: Brontë, Austen,
+                                             Dickens, Shakespeare, Tolstoy, Fitzgerald).
+                        "comic_book"         Based on a comic book, graphic novel, or strip.
+                        "video_game"         Based on a video game franchise.
+                        "stage_musical"      Based on a stage musical production.
+                        "remake"             New version of a specific prior film.
+                        "reboot"             Restarts an established film franchise from
+                                             the beginning with new story/cast.
+                        "biopic"             Narrative dramatisation of a real person's life.
+                        "true_story"         Based on real events but not primarily one
+                                             person's life (historical drama, true crime,
+                                             disaster film).
+                        "concert_film"       Filmed concert / live music event with
+                                             minimal narrative.
+                        "documentary"        Non-fiction observational / journalistic film.
+                      Prefer "remake" if the immediate source is a prior film. Prefer
+                      "novel" when a film is based on a novel that was previously filmed.
 
       ── Quality rules ──
 
@@ -112,5 +178,7 @@ tasks:
           { "order": 1, "actor": "Tom Holland",   "character": "Peter Parker / Spider-Man" },
           { "order": 2, "actor": "Zendaya",       "character": "MJ" },
           { "order": 3, "actor": "Jon Bernthal",  "character": "Frank Castle / Punisher" }
-        ]
+        ],
+        "ip_strength":     "iconic",
+        "adaptation_type": "comic_book"
       }

@@ -16,9 +16,13 @@ Or directly:
 import asyncio
 import gc
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -29,8 +33,8 @@ from load_prompts import load_tasks_from_yaml
 from extractor import LlmJsonExtractor
 from models import MODELS
 
-PROMPTS_PATH = Path('prompts', 'prompts.yaml')
-OUTPUT_PATH = Path('synopses', 'outputs', 'model_comparison.xlsx')
+PROMPTS_PATH = _REPO / 'prompts' / 'prompts.yaml'
+OUTPUT_PATH = _REPO / 'synopses' / 'outputs' / 'model_comparison.xlsx'
 
 LIST_FIELDS = [
     'themes', 'genres', 'subgenres', 'setting_types', 'time_periods',

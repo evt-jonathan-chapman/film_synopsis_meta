@@ -24,6 +24,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
+
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -50,7 +53,7 @@ TEST_PARQUET  = DATA_DIR / 'raw_from_snowflake' / '20260129' / 'test'  / 'test_r
 
 MODEL_NAME = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
 MAX_CONCURRENCY = 4
-PROMPTS_PATH = 'prompts/film_meta_prompts.yaml'
+PROMPTS_PATH = str(_REPO / 'prompts' / 'film_meta_prompts.yaml')
 
 OUTPUT_DIR  = DATA_DIR / 'film_meta' / 'compare_search'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
