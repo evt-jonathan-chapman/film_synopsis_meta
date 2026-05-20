@@ -27,8 +27,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
-
 from extractor import LlmJsonExtractor
 from film_meta_extractor import FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor
 from load_prompts import load_tasks_from_yaml
@@ -56,8 +54,8 @@ FILM_IDS = None
 SAMPLE_SIZE = 0          # 0 = all; N = first N films by release date
 
 RUN_SYNOPSIS  = False       # extract synopsis features via LLM
-RUN_CAST      = True      # enrich cast profiles via LLM
-RUN_DIRECTOR  = True      # enrich director profiles via LLM
+RUN_CAST      = False      # enrich cast profiles via LLM
+RUN_DIRECTOR  = False      # enrich director profiles via LLM
 RUN_META      = True      # web-grounded film_meta extraction (studios/cast/genres/budget/trailers)
 RUN_ENCODE    = False    # DEPRECATED 2026-05-19 — encoding moved to cinema_admits_models/build_data/encode_llm_features.py. The encode_*.py scripts have been moved to depreciated/encoding/. Leave False; flip True only for legacy reruns.
 
@@ -66,16 +64,20 @@ BATCH_PAUSE_SECS = 3   # pause between 100-film batches to let the rate window r
 MAX_COST_USD    = 20.00    # hard stop if cumulative spend exceeds this
 
 # film_meta uses lower concurrency — each call invokes web_search (~5-10s latency)
-META_MAX_CONCURRENCY = 4
+# Bound by TPM, not RPM: org limit is 200k TPM, each call ≈ 15k tokens → max
+# sustainable ≈ 13 req/min. 2 concurrent × ~7s/call ≈ 17 req/min — leaves headroom
+# for SDK retries to claw back any transient 429s.
+META_MAX_CONCURRENCY = 2
 
 PROMPTS_PATH           = 'prompts/prompts_v2.yaml'
 CAST_PROMPTS_PATH      = 'prompts/cast_prompts.yaml'
 DIRECTOR_PROMPTS_PATH  = 'prompts/director_prompts.yaml'
 FILM_META_PROMPTS_PATH = 'prompts/film_meta_prompts.yaml'
-
+ 
 CHECKPOINT_PATH            = DATA_DIR / 'synopsis_v2'    / 'synopsis_progress.json'
 DIRECTOR_CHECKPOINT_PATH   = DATA_DIR / 'director_meta'  / 'director_progress.json'
 FILM_META_CHECKPOINT_PATH  = DATA_DIR / 'film_meta'      / 'film_meta_progress.json'
+FILM_META_ERRORS_PATH      = DATA_DIR / 'film_meta'      / 'film_meta_errors.json'
 
 # ── Load films from parquets (all available train/test/pred dates) ────────────
 
@@ -615,6 +617,10 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
             max_concurrency=META_MAX_CONCURRENCY,
         )
 
+        # Title lookup for error log enrichment
+        title_lookup = chunk.set_index('film_id')['film_title'].to_dict()
+
+        batch_errors: dict[str, dict] = {}
         for film_id, data in results.items():
             if not data.get('_error'):
                 data['film_id'] = film_id
@@ -624,10 +630,33 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
                 data['evt_dstbtr'] = str(passthrough.get('evt_dstbtr')) if pd.notna(passthrough.get('evt_dstbtr')) else None
                 data['evt_rel_at'] = str(passthrough.get('evt_rel_at')) if pd.notna(passthrough.get('evt_rel_at')) else None
                 checkpoint[str(film_id)] = data
+            else:
+                batch_errors[str(film_id)] = {
+                    'film_id':     film_id,
+                    'film_title':  title_lookup.get(film_id),
+                    '_error':      data.get('_error'),
+                    '_raw_output': data.get('_raw_output'),
+                }
 
         with open(FILM_META_CHECKPOINT_PATH, 'w') as f:
             json.dump(checkpoint, f, default=str)
         print(f"  Checkpoint saved: {len(checkpoint)} films → {FILM_META_CHECKPOINT_PATH}")
+
+        if batch_errors:
+            existing_errors: dict = {}
+            if FILM_META_ERRORS_PATH.exists():
+                with open(FILM_META_ERRORS_PATH) as f:
+                    existing_errors = json.load(f)
+            existing_errors.update(batch_errors)
+            with open(FILM_META_ERRORS_PATH, 'w') as f:
+                json.dump(existing_errors, f, default=str, indent=2)
+            err_counts: dict[str, int] = {}
+            for v in batch_errors.values():
+                key = str(v.get('_error', 'unknown')).split(':')[0][:40]
+                err_counts[key] = err_counts.get(key, 0) + 1
+            print(f"  Errors this batch: {len(batch_errors)} "
+                  f"({', '.join(f'{k}={n}' for k, n in err_counts.items())}) "
+                  f"→ {FILM_META_ERRORS_PATH}")
 
         if extractor.token_usage:
             curr = extractor.token_usage.get('cost_usd', 0.0)

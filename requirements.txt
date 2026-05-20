@@ -1,0 +1,28 @@
+# Dagster
+dagster
+dagster-webserver
+
+# Core data
+pandas
+pyarrow
+numpy
+
+# LLM
+openai
+litellm
+
+# Config / env
+python-dotenv
+PyYAML
+
+# Async
+nest_asyncio
+
+# Snowflake
+snowflake-connector-python
+snowflake-sqlalchemy
+sqlalchemy
+cryptography
+
+# HTTP
+requests

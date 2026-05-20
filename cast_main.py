@@ -12,9 +12,6 @@ Usage: edit the run block at the bottom, then:
     python cast_main.py
 """
 
-import sys
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
-
 import asyncio
 import nest_asyncio
 nest_asyncio.apply()

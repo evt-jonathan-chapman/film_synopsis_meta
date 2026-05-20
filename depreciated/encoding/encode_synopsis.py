@@ -11,9 +11,6 @@ Usage:
     encode_synopsis_features(out_date)     # callable from refresh.py
 """
 
-import sys
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
-
 import datetime
 import os
 from functools import reduce

@@ -32,8 +32,6 @@ import litellm
 litellm.success_callback = []
 litellm.failure_callback = []
 
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
-
 from base_snowflake import SnowFlakeBase
 from extractor import LlmJsonExtractor
 from load_prompts import load_tasks_from_yaml

@@ -43,7 +43,6 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
 
 from film_meta_extractor import (
     FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor,

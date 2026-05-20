@@ -85,7 +85,9 @@ class ResponsesExtractor:
     ):
         self.task   = task
         self.model  = model
-        self.client = AsyncOpenAI(api_key=api_key)
+        # max_retries=8 — TPM-rolling-window saturation can take 30-60s to drain;
+        # the SDK honours Retry-After and uses exponential backoff between attempts.
+        self.client = AsyncOpenAI(api_key=api_key, max_retries=8)
         self._cost_in  = cost_per_1m_input
         self._cost_out = cost_per_1m_output
         self.use_web_search = use_web_search

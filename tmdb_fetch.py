@@ -2,7 +2,6 @@
 tmdb_fetch.py — fetch TMDB production company data and map to studio tier.
 """
 
-import sys
 import time
 import os
 import glob
@@ -12,8 +11,6 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-
-sys.path.insert(0, '/Users/jonathanchapman/Documents/git/evt_back_up/base')
 
 from config import DATA_DIR, SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY, RAW_PARQUET_GLOB
 from films import sql as films_sql
