@@ -39,17 +39,30 @@ from film_meta_extractor import FilmMetaExtractor
 from load_prompts import load_tasks_from_yaml
 from models import MODELS
 from config import DATA_DIR
-
+import json
 # ── Sample (20 films) ─────────────────────────────────────────────────────────
 
-HISTORIC_IDS = [40671, 32971, 47138, 46677, 47064,    # 2022
-                55986, 57353, 57360, 56584, 55702]    # 2024
-RECENT_IDS   = [60592, 60336, 57343, 59534, 60261,    # 2026 H1
-                59041, 59042, 60335, 61212, 59531]
-SAMPLE_IDS = HISTORIC_IDS + RECENT_IDS
+# HISTORIC_IDS = [40671, 32971, 47138, 46677, 47064,    # 2022
+#                 55986, 57353, 57360, 56584, 55702]    # 2024
+# RECENT_IDS   = [60592, 60336, 57343, 59534, 60261,    # 2026 H1
+#                 59041, 59042, 60335, 61212, 59531]
+# SAMPLE_IDS = HISTORIC_IDS + RECENT_IDS
 
-TRAIN_PARQUET = DATA_DIR / 'raw_from_snowflake' / '20260129' / 'train' / 'train_raw_ds.parquet'
-TEST_PARQUET  = DATA_DIR / 'raw_from_snowflake' / '20260129' / 'test'  / 'test_raw_ds.parquet'
+
+NEW_JSON_PROGRESS = "/Users/jonathanchapman/Documents/data/film_meta/film_meta_progress.json"
+
+OLD_TMDB_DATA = "/Users/jonathanchapman/Documents/data/_old_meta/tmdb/tmdb_cache.parquet"
+
+with open(NEW_JSON_PROGRESS) as f:
+    checkpoint: dict = json.load(f)
+
+TMDB = pd.read_parquet(OLD_TMDB_DATA)
+
+new_extract = pd.DataFrame.from_dict(checkpoint).T
+
+
+# TRAIN_PARQUET = DATA_DIR / 'raw_from_snowflake' / '20260129' / 'train' / 'train_raw_ds.parquet'
+# TEST_PARQUET  = DATA_DIR / 'raw_from_snowflake' / '20260129' / 'test'  / 'test_raw_ds.parquet'
 
 MODEL_NAME = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
 MAX_CONCURRENCY = 4

@@ -149,7 +149,12 @@ if not df_films.empty:
 
 BATCH_SIZE = 25    # checkpoint to JSON every N films
 
+# Running spend, incremented per batch inside each enrich function via `global`.
+# Survives KeyboardInterrupt — inspect from the REPL after a partial run.
+_total_cost = 0.0
+
 async def extract_synopses(df: pd.DataFrame) -> float:
+    global _total_cost
     import json
 
     if df.empty:
@@ -185,6 +190,7 @@ async def extract_synopses(df: pd.DataFrame) -> float:
     )
 
     chunks = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
+    prev_cost = 0.0
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nBatch {batch_num}/{len(chunks)}  ({len(chunk)} films)")
         results = await extractor.arun_multiple_synopses(
@@ -205,6 +211,14 @@ async def extract_synopses(df: pd.DataFrame) -> float:
         with open(CHECKPOINT_PATH, 'w') as f:
             json.dump(checkpoint, f)
         print(f"  Checkpoint saved: {len(checkpoint)} films → {CHECKPOINT_PATH}")
+
+        if extractor.token_usage:
+            curr = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            _total_cost += delta
+            prev_cost = curr
+            print(f"  Batch cost: ${delta:.4f}  |  Run total: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
+
         if batch_num < len(chunks):
             await asyncio.sleep(BATCH_PAUSE_SECS)
 
@@ -257,6 +271,7 @@ def _clean_actor(raw: str) -> str:
 CAST_CHECKPOINT_PATH = DATA_DIR / 'cast_meta' / 'cast_progress.json'
 
 async def enrich_cast(df_source: pd.DataFrame) -> float:
+    global _total_cost
     import json
 
     all_actors: set[str] = set()
@@ -293,6 +308,7 @@ async def enrich_cast(df_source: pd.DataFrame) -> float:
     )
 
     chunks = [df_actors.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_actors), BATCH_SIZE)]
+    prev_cost = 0.0
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nCast batch {batch_num}/{len(chunks)}  ({len(chunk)} actors)")
         results = await extractor.arun(
@@ -309,6 +325,14 @@ async def enrich_cast(df_source: pd.DataFrame) -> float:
         with open(CAST_CHECKPOINT_PATH, 'w') as f:
             json.dump(checkpoint, f)
         print(f"  Checkpoint saved: {len(checkpoint)} actors → {CAST_CHECKPOINT_PATH}")
+
+        if extractor.token_usage:
+            curr = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            _total_cost += delta
+            prev_cost = curr
+            print(f"  Batch cost: ${delta:.4f}  |  Run total: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
+
         if batch_num < len(chunks):
             await asyncio.sleep(BATCH_PAUSE_SECS)
 
@@ -358,6 +382,7 @@ async def enrich_cast(df_source: pd.DataFrame) -> float:
 # ── Director enrichment ───────────────────────────────────────────────────────
 
 async def enrich_directors(df_source: pd.DataFrame) -> float:
+    global _total_cost
     import json
 
     all_directors: set[str] = set()
@@ -396,6 +421,7 @@ async def enrich_directors(df_source: pd.DataFrame) -> float:
     )
 
     chunks = [df_directors.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_directors), BATCH_SIZE)]
+    prev_cost = 0.0
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nDirector batch {batch_num}/{len(chunks)}  ({len(chunk)} directors)")
         results = await extractor.arun(
@@ -412,6 +438,14 @@ async def enrich_directors(df_source: pd.DataFrame) -> float:
         with open(DIRECTOR_CHECKPOINT_PATH, 'w') as f:
             json.dump(checkpoint, f)
         print(f"  Checkpoint saved: {len(checkpoint)} directors → {DIRECTOR_CHECKPOINT_PATH}")
+
+        if extractor.token_usage:
+            curr = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            _total_cost += delta
+            prev_cost = curr
+            print(f"  Batch cost: ${delta:.4f}  |  Run total: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
+
         if batch_num < len(chunks):
             await asyncio.sleep(BATCH_PAUSE_SECS)
 
@@ -499,6 +533,7 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
     Checkpoint format: { "<film_id>": { ...schema..., "_error": ... } }
     Output parquet: FILM_META_ENRICHED_PATH (one row per film_id).
     """
+    global _total_cost
     import json
 
     if df_source.empty:
@@ -567,6 +602,7 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
     )
 
     chunks = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
+    prev_cost = 0.0
     for batch_num, chunk in enumerate(chunks, 1):
         print(f"\nfilm_meta batch {batch_num}/{len(chunks)}  ({len(chunk)} films)")
         results = await extractor.arun(
@@ -574,7 +610,8 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
             id_col='film_id',
             title_col='film_title',
             rel_at_col='rel_at',
-            dstbtr_col='dstbtr',
+            director_col='director',
+            synopsis_col='synopsis',
             max_concurrency=META_MAX_CONCURRENCY,
         )
 
@@ -591,6 +628,14 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
         with open(FILM_META_CHECKPOINT_PATH, 'w') as f:
             json.dump(checkpoint, f, default=str)
         print(f"  Checkpoint saved: {len(checkpoint)} films → {FILM_META_CHECKPOINT_PATH}")
+
+        if extractor.token_usage:
+            curr = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            _total_cost += delta
+            prev_cost = curr
+            print(f"  Batch cost: ${delta:.4f}  |  Run total: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
+
         if batch_num < len(chunks):
             await asyncio.sleep(BATCH_PAUSE_SECS)
 
@@ -627,11 +672,11 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
-
-_total_cost = 0.0
+# _total_cost is updated per-batch inside each enrich function via `global`,
+# so it survives KeyboardInterrupt — inspect from the REPL after a partial run.
 
 if RUN_SYNOPSIS:
-    _total_cost += asyncio.run(extract_synopses(df_films)) or 0.0
+    asyncio.run(extract_synopses(df_films))
     print(f"\nCumulative cost so far: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
 
 if RUN_CAST:
@@ -639,7 +684,7 @@ if RUN_CAST:
         print(f"Cost cap reached (${_total_cost:.4f}) — skipping cast enrichment")
     else:
         _all_films = pd.concat(_parts, ignore_index=True).drop_duplicates('film_id')
-        _total_cost += asyncio.run(enrich_cast(_all_films)) or 0.0
+        asyncio.run(enrich_cast(_all_films))
         print(f"\nCumulative cost so far: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
 
 if RUN_DIRECTOR:
@@ -647,7 +692,7 @@ if RUN_DIRECTOR:
         print(f"Cost cap reached (${_total_cost:.4f}) — skipping director enrichment")
     else:
         _all_films = pd.concat(_parts, ignore_index=True).drop_duplicates('film_id')
-        _total_cost += asyncio.run(enrich_directors(_all_films)) or 0.0
+        asyncio.run(enrich_directors(_all_films))
         print(f"\nCumulative cost so far: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
 
 if RUN_META:
@@ -675,7 +720,7 @@ if RUN_META:
             print(f"film_lookup unavailable for re-release filter ({_e}) — proceeding without")
             _flu_full = None
 
-        _total_cost += asyncio.run(enrich_film_meta(_meta_df, film_lookup=_flu_full)) or 0.0
+        asyncio.run(enrich_film_meta(_meta_df, film_lookup=_flu_full))
         print(f"\nCumulative cost so far: ${_total_cost:.4f} / ${MAX_COST_USD:.2f}")
 
 print(f"\nTotal spend: ${_total_cost:.4f}")

@@ -56,6 +56,20 @@ def _parse_response(raw: str) -> dict | None:
             return None
 
 
+def _first_sentence(text: str, max_chars: int = 250) -> str:
+    """First sentence of a synopsis, used as a disambiguation hint.
+
+    Looks for a sentence-ending punctuation followed by whitespace and an
+    uppercase letter, but only after position 20 to skip leading abbreviations
+    like "Mr." or "Dr.". Falls back to first max_chars.
+    """
+    text = str(text).strip()
+    m = re.search(r"[.!?]\s+(?=[A-Z])", text)
+    if m and m.start() >= 20:
+        return text[: m.start() + 1]
+    return text[:max_chars]
+
+
 class ResponsesExtractor:
     """Base class — wraps a Responses API call with optional web_search and
     JSON-parsing. Subclasses implement `_build_user_msg` and `arun`."""
@@ -111,20 +125,31 @@ class ResponsesExtractor:
 
 
 class FilmMetaExtractor(ResponsesExtractor):
-    """Per-film metadata. Inputs: title + release_date + AU distributor."""
+    """Per-film metadata. Inputs: title + release_date + director + first
+    sentence of EVT synopsis. Director + synopsis are disambiguation anchors —
+    two films can share a title and year, but rarely share a director and
+    almost never share an opening sentence."""
 
-    def _build_user_msg(self, title: str, rel_at: Any, dstbtr: Any) -> str:
-        rel_str    = pd.to_datetime(rel_at).strftime("%Y-%m-%d") if pd.notna(rel_at) else "unknown"
-        dstbtr_str = str(dstbtr).strip() if pd.notna(dstbtr) else "unknown"
+    def _build_user_msg(
+        self,
+        title: str,
+        rel_at: Any,
+        director: Any = None,
+        synopsis: Any = None,
+    ) -> str:
+        rel_str = pd.to_datetime(rel_at).strftime("%Y-%m-%d") if pd.notna(rel_at) else "unknown"
+        dir_str = str(director).strip() if pd.notna(director) and str(director).strip() else "unknown"
+        syn_str = _first_sentence(synopsis) if pd.notna(synopsis) and str(synopsis).strip() else "unknown"
         return (
             f'Title: "{title}"\n'
             f"Estimated release date: {rel_str}\n"
-            f"Distributor (Australia): {dstbtr_str}\n"
+            f"Director (per EVT records): {dir_str}\n"
+            f'Synopsis opening (per EVT records): "{syn_str}"\n'
             f"\nExtract the metadata JSON now."
         )
 
-    async def _extract_one(self, film_id, title, rel_at, dstbtr, semaphore):
-        user_msg = self._build_user_msg(title, rel_at, dstbtr)
+    async def _extract_one(self, film_id, title, rel_at, director, synopsis, semaphore):
+        user_msg = self._build_user_msg(title, rel_at, director, synopsis)
         async with semaphore:
             try:
                 return film_id, await self._call_api(user_msg)
@@ -137,14 +162,19 @@ class FilmMetaExtractor(ResponsesExtractor):
         id_col: str = "film_id",
         title_col: str = "film_title",
         rel_at_col: str = "rel_at",
-        dstbtr_col: str = "dstbtr",
+        director_col: str = "director",
+        synopsis_col: str = "synopsis",
         max_concurrency: int = 4,
     ) -> dict[int, dict]:
         sem = asyncio.Semaphore(max_concurrency)
         coros = [
             self._extract_one(
-                int(row[id_col]), str(row[title_col]),
-                row.get(rel_at_col), row.get(dstbtr_col), sem,
+                int(row[id_col]),
+                str(row[title_col]),
+                row.get(rel_at_col),
+                row.get(director_col),
+                row.get(synopsis_col),
+                sem,
             )
             for _, row in df.iterrows()
         ]

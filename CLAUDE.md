@@ -3,7 +3,7 @@
 LLM extraction of film metadata for the EVT box office model. **Raw extraction only** — encoding moved to `cinema_admits_models/build_data/` (2026-05-19).
 
 **Data root:** `~/Documents/data` (shared with `cinema_admits_models`)
-**Last updated:** 2026-05-19
+**Last updated:** 2026-05-19 (film_meta disambiguation: title + rel_at + director + synopsis opening)
 
 ---
 
@@ -116,6 +116,12 @@ Check balance: https://platform.openai.com/settings/organization/billing/overvie
 ---
 
 ## Recent changes
+
+**2026-05-19 (later) — film_meta disambiguation inputs changed**
+- `FilmMetaExtractor` now sends **title + release date + director + first sentence of EVT synopsis** to the LLM. AU distributor is no longer sent (it stays in `df_source` for the skip-filter and `evt_dstbtr` passthrough on save, but is hidden from the model).
+- Motivation: two films can share title + year. Director and synopsis-opening are strong disambiguation anchors; distributor was weak.
+- Prompt (`prompts/film_meta_prompts.yaml`) gained a **Disambiguation** section instructing the model to verify candidates against the EVT director + synopsis and to return `{"_error": "ambiguous", "_candidates": [...]}` instead of guessing when two films still match. Worth grepping checkpoints for `_error: "ambiguous"` after runs.
+- `arun()` signature: `dstbtr_col` removed; `director_col='director'` and `synopsis_col='synopsis'` added. Both columns are already in `df_films` from the raw parquets — no new joins needed.
 
 **2026-05-19 — encoding moved out + cast/director upgraded to web_search**
 - Three encoders moved/deprecated: `encode_synopsis.py` → `depreciated/encoding/` (functionality in `cinema_admits_models/build_data/encode_llm_features.py`); `cast_encode.py` and `director_encode.py` moved to `cinema_admits_models/build_data/` as `encode_cast_features.py` and `encode_director_features.py`.
