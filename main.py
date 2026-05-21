@@ -51,7 +51,18 @@ from films import sql as films_sql
 FILM_IDS = None
 # FILM_IDS = [57603, 57343, 59530, 60336, 60261, 60560]
 
-SAMPLE_SIZE = 0          # 0 = all; N = first N films by release date
+# Quota-recovery sanity-check: uncomment to run only the first N films that
+# previously failed with "exceeded your current quota". Lets you verify the
+# OpenAI top-up worked before kicking off a full Dagster run.
+# _qpath = DATA_DIR / 'film_meta' / 'film_meta_errors.json'
+# if _qpath.exists():
+#     import json as _json
+#     _errs = _json.loads(_qpath.read_text())
+#     FILM_IDS = [int(fid) for fid, e in _errs.items()
+#                 if 'exceeded your current quota' in str(e.get('_error', '')).lower()][:10]
+#     print(f"Quota-recovery mode: testing {len(FILM_IDS)} previously-failed films")
+
+SAMPLE_SIZE   = 0          # 0 = all; N = first N films by release date
 
 RUN_SYNOPSIS  = False       # extract synopsis features via LLM
 RUN_CAST      = False      # enrich cast profiles via LLM
@@ -560,8 +571,7 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
     # ── Filter: re-releases ───────────────────────────────────────────────────
     if film_lookup is not None and 'rel_at' in film_lookup.columns:
         try:
-            sys.path.insert(0, '/Users/jonathanchapman/Documents/git/cinema_admits_models')
-            from re_release_filter import ReReleaseFilter
+            from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter
             rr = ReReleaseFilter()
             flagged = rr.flag(df_source.rename(columns={'film_title': 'film'}), film_lookup, title_col='film')
             n_rr = int(flagged['rerelease_flag'].sum())
@@ -621,6 +631,7 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
         title_lookup = chunk.set_index('film_id')['film_title'].to_dict()
 
         batch_errors: dict[str, dict] = {}
+        batch_success_ids: set[str] = set()
         for film_id, data in results.items():
             if not data.get('_error'):
                 data['film_id'] = film_id
@@ -630,6 +641,7 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
                 data['evt_dstbtr'] = str(passthrough.get('evt_dstbtr')) if pd.notna(passthrough.get('evt_dstbtr')) else None
                 data['evt_rel_at'] = str(passthrough.get('evt_rel_at')) if pd.notna(passthrough.get('evt_rel_at')) else None
                 checkpoint[str(film_id)] = data
+                batch_success_ids.add(str(film_id))
             else:
                 batch_errors[str(film_id)] = {
                     'film_id':     film_id,
@@ -642,21 +654,31 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
             json.dump(checkpoint, f, default=str)
         print(f"  Checkpoint saved: {len(checkpoint)} films → {FILM_META_CHECKPOINT_PATH}")
 
-        if batch_errors:
+        # Errors JSON: merge in new errors AND drop entries for films that just
+        # succeeded (covers both this batch's wins and stale entries from prior
+        # runs that have since recovered).
+        if batch_errors or (batch_success_ids and FILM_META_ERRORS_PATH.exists()):
             existing_errors: dict = {}
             if FILM_META_ERRORS_PATH.exists():
                 with open(FILM_META_ERRORS_PATH) as f:
                     existing_errors = json.load(f)
+            purged_n = sum(1 for fid in batch_success_ids
+                           if existing_errors.pop(fid, None) is not None)
             existing_errors.update(batch_errors)
-            with open(FILM_META_ERRORS_PATH, 'w') as f:
-                json.dump(existing_errors, f, default=str, indent=2)
+            if purged_n or batch_errors:
+                with open(FILM_META_ERRORS_PATH, 'w') as f:
+                    json.dump(existing_errors, f, default=str, indent=2)
             err_counts: dict[str, int] = {}
             for v in batch_errors.values():
                 key = str(v.get('_error', 'unknown')).split(':')[0][:40]
                 err_counts[key] = err_counts.get(key, 0) + 1
-            print(f"  Errors this batch: {len(batch_errors)} "
-                  f"({', '.join(f'{k}={n}' for k, n in err_counts.items())}) "
-                  f"→ {FILM_META_ERRORS_PATH}")
+            msg = f"  Errors this batch: {len(batch_errors)}"
+            if err_counts:
+                msg += f" ({', '.join(f'{k}={n}' for k, n in err_counts.items())})"
+            if purged_n:
+                msg += f"  [purged {purged_n} now-recovered]"
+            msg += f" → {FILM_META_ERRORS_PATH}"
+            print(msg)
 
         if extractor.token_usage:
             curr = extractor.token_usage.get('cost_usd', 0.0)

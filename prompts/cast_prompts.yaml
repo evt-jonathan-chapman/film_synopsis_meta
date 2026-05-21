@@ -84,4 +84,12 @@ tasks:
       - The ACTOR NAME may be in uppercase — treat it as a name, not a keyword.
       - If you genuinely do not recognise the name, return all "unknown" fields.
       - Do not guess or fabricate details about people you don't know.
+      - SEARCH BUDGET: perform AT MOST ONE web_search per actor. Use the
+        Wikipedia or IMDb page returned and extract all five fields from
+        that single result. Do NOT do follow-up searches to verify single
+        fields. If the first search returns nothing reliable, return all
+        "unknown" rather than searching again.
+      - Do NOT append source citations or URL annotations to field values
+        (e.g. do NOT write "astar ([wikipedia.org](https://...))"). Values
+        must be the bare enum string only.
       - Output ONLY valid JSON. No explanations. No backticks.

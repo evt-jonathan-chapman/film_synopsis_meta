@@ -1,0 +1,28 @@
+[32m2026-05-21 10:42:25 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - LOGS_CAPTURED - Capturing logs for process (pid: 76425).
+[32m2026-05-21 10:42:25 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - films_source - STEP_START - Started execution of step "films_source".
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20251112/train/train_raw_ds.parquet: 4635 films
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20251130/train/train_raw_ds.parquet: 2087 films
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20260129/train/train_raw_ds.parquet: 4772 films
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20251112/test/test_raw_ds.parquet: 223 films
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20251130/test/test_raw_ds.parquet: 170 films
+2026-05-21 10:42:27  INFO    raw_from_snowflake/20260129/test/test_raw_ds.parquet: 174 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260225/prediction_raw.parquet: 145 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260302/prediction_raw.parquet: 5 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260303/prediction_raw.parquet: 5 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260304/prediction_raw.parquet: 5 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260331/prediction_raw.parquet: 132 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260407/prediction_raw.parquet: 126 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260413/prediction_raw.parquet: 194 films
+2026-05-21 10:42:28  INFO    prediction_from_snowflake/20260430/prediction_raw.parquet: 179 films
+2026-05-21 10:42:28  INFO  Unique films from parquets: 5092
+2026-05-21 10:42:28  INFO  Films with synopsis: 4848
+2026-05-21 10:42:28  INFO  Snowflake Connector for Python Version: 4.5.0, Python Version: 3.11.15, Platform: macOS-26.3.1-arm64-arm-64bit
+2026-05-21 10:42:28  INFO  Connecting to GLOBAL Snowflake domain
+2026-05-21 10:42:32  INFO  Film titles joined from Snowflake
+[32m2026-05-21 10:42:33 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - films_source - STEP_OUTPUT - Yielded output "result" of type "DataFrame". (Type check passed).
+[32m2026-05-21 10:42:33 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - films_source - Writing file at: /Users/jonathanchapman/Documents/git/film_synopsis_meta/.tmp_dagster_home_dp655qzx/storage/films_source using PickledObjectFilesystemIOManager...
+2026-05-21 10:42:33  INFO  Context impl SQLiteImpl.
+2026-05-21 10:42:33  INFO  Will assume non-transactional DDL.
+[32m2026-05-21 10:42:33 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - films_source - ASSET_MATERIALIZATION - Materialized value films_source.
+[32m2026-05-21 10:42:33 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - films_source - HANDLED_OUTPUT - Handled output "result" using IO manager "io_manager"
+[32m2026-05-21 10:42:33 +1000[0m - dagster - [34mDEBUG[0m - film_meta_job - 1aff99b2-ddda-46e9-96ad-b9309d742f46 - 76425 - films_source - STEP_SUCCESS - Finished execution of step "films_source" in 7.86s.

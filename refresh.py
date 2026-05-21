@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import datetime
 import gc
+import json
 import logging
 import os
 import re
@@ -37,6 +38,7 @@ litellm.success_callback = []
 litellm.failure_callback = []
 
 from config import (
+    DATA_DIR,
     SYNOPSES_EXTRACTED_PATH, CAST_ENRICHED_PATH,
     DIRECTOR_ENRICHED_PATH, FILM_META_ENRICHED_PATH,
     SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY,
@@ -63,6 +65,15 @@ DIRECTOR_PROMPTS_PATH  = Path('prompts/director_prompts.yaml')
 FILM_META_PROMPTS_PATH = Path('prompts/film_meta_prompts.yaml')
 
 META_MAX_CONCURRENCY = 2   # web_search calls bound by 200k TPM ≈ 13 req/min sustainable
+META_BATCH_SIZE       = 25  # films per checkpoint flush — matches main.py
+META_BATCH_PAUSE_SECS = 3   # pause between batches to let TPM window reset
+
+FILM_META_CHECKPOINT_PATH = DATA_DIR / 'film_meta' / 'film_meta_progress.json'
+FILM_META_ERRORS_PATH     = DATA_DIR / 'film_meta' / 'film_meta_errors.json'
+CAST_CHECKPOINT_PATH      = DATA_DIR / 'cast_meta'     / 'cast_progress.json'
+CAST_ERRORS_PATH          = DATA_DIR / 'cast_meta'     / 'cast_errors.json'
+DIRECTOR_CHECKPOINT_PATH  = DATA_DIR / 'director_meta' / 'director_progress.json'
+DIRECTOR_ERRORS_PATH      = DATA_DIR / 'director_meta' / 'director_errors.json'
 
 # Distributors with no extractable cast/budget/studios metadata.
 # Mirrors main.py::FILM_META_SKIP_DISTRIBUTORS.
@@ -94,37 +105,82 @@ def _clean_actor(raw: str) -> str:
 # ── Source loaders ────────────────────────────────────────────────────────────
 
 def load_films_from_snowflake() -> pd.DataFrame | None:
-    """
-    Pull current film list from Snowflake via SQL_FILM_DETAILS.
+    """Returns the curated film work-set used by all four extraction paths.
 
-    Returns a DataFrame with normalised column names:
-        film_id, film_title, synopsis, alt_synopsis,
-        actor_list, director, dstbtr, rel_at
+    Mirrors main.py's loader: reads the train/test/prediction parquet snapshots
+    (the model-relevant subset of EVT's catalogue — ~4–5k films), drops rows
+    without a usable synopsis, then joins authoritative titles + the
+    distributor column from Snowflake.
 
-    Returns None if Snowflake is unavailable.
+    Function name kept for backwards-compat with dagster_defs.py — note the
+    primary source is now the parquets, not Snowflake.
+
+    Returns None only if the parquet snapshots are unreadable.
     """
+    import glob
+
+    raw_paths  = sorted(glob.glob(str(DATA_DIR / 'raw_from_snowflake'        / '*' / 'train' / 'train_raw_ds.parquet')))
+    raw_paths += sorted(glob.glob(str(DATA_DIR / 'raw_from_snowflake'        / '*' / 'test'  / 'test_raw_ds.parquet')))
+    pred_paths = sorted(glob.glob(str(DATA_DIR / 'prediction_from_snowflake' / '*' / 'prediction_raw.parquet')))
+    all_paths  = raw_paths + pred_paths
+
+    if not all_paths:
+        log.warning(f"No parquet snapshots found under {DATA_DIR}/raw_from_snowflake or /prediction_from_snowflake")
+        return None
+
+    parts = []
+    for p in all_paths:
+        part = pd.read_parquet(p, columns=['film_id', 'synopsis', 'actor_list',
+                                           'rel_at', 'director', 'dstbtr'])
+        part['rel_at'] = pd.to_datetime(part['rel_at'], utc=True, errors='coerce')
+        parts.append(part)
+        log.info(f"  {Path(p).relative_to(DATA_DIR)}: {part['film_id'].nunique()} films")
+
+    df = (pd.concat(parts, ignore_index=True)
+            .drop_duplicates('film_id')
+            .assign(film_id=lambda d: d['film_id'].astype(int)))
+    log.info(f"Unique films from parquets: {len(df)}")
+
+    df = df[df['synopsis'].notna() & (df['synopsis'].astype(str).str.len() >= 5)].copy()
+    log.info(f"Films with synopsis: {len(df)}")
+
     try:
         from base_snowflake import SnowFlakeBase
         sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
         sb.create_snowflake_connection(SF_RSA_KEY)
-        df = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)
+        titles = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)[['film_id', 'film_title']]
+        titles['film_id'] = titles['film_id'].astype(int)
+        df = df.merge(titles, on='film_id', how='left')
+        log.info("Film titles joined from Snowflake")
     except Exception as e:
-        log.warning(f"Snowflake unavailable ({e})")
-        return None
+        log.warning(f"Snowflake unavailable ({e}) — using film_id as title fallback")
+        df['film_title'] = df['film_id'].astype(str)
 
-    df = df.rename(columns={
-        'director_list':       'director',
-        'distributor_name':    'dstbtr',
-        'film_nat_open_date':  'rel_at',
-    })
-    df['film_id'] = df['film_id'].astype(int)
-    df['rel_at']  = pd.to_datetime(df['rel_at'], utc=True, errors='coerce')
-
-    keep = ['film_id', 'film_title', 'synopsis', 'alt_synopsis',
-            'actor_list', 'director', 'dstbtr', 'rel_at']
-    df = df[[c for c in keep if c in df.columns]].copy()
-    log.info(f"Snowflake: {len(df)} films loaded")
     return df
+
+
+def load_full_film_catalogue() -> pd.DataFrame | None:
+    """Full Snowflake film_details — used by the re-release filter so older
+    releases (outside our model-relevant snapshot window) can still be matched
+    against current films. Mirrors main.py's `_flu_full` query."""
+    try:
+        from base_snowflake import SnowFlakeBase
+        sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
+        sb.create_snowflake_connection(SF_RSA_KEY)
+        full = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)
+        full = full.rename(columns={
+            'director_list':      'director',
+            'distributor_name':   'dstbtr',
+            'film_nat_open_date': 'rel_at',
+            'film_title':         'film',
+        })
+        full['film_id'] = full['film_id'].astype(int)
+        full['rel_at']  = pd.to_datetime(full['rel_at'], utc=True, errors='coerce')
+        log.info(f"Full Snowflake catalogue loaded for re-release lookup: {len(full)} films")
+        return full
+    except Exception as e:
+        log.warning(f"Snowflake unavailable for re-release lookup ({e})")
+        return None
 
 
 def _ensure_films(df_films: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -156,6 +212,11 @@ def _diff_synopsis_films(df_films: pd.DataFrame) -> pd.DataFrame:
 
 
 def _diff_actors(df_films: pd.DataFrame) -> list[str]:
+    """Actors not yet in cast_enriched.parquet OR cast_progress.json checkpoint.
+
+    Reading both means a partially-completed run (checkpoint written, parquet
+    not yet flushed) doesn't get re-extracted from scratch.
+    """
     all_actors: set[str] = set()
     for val in df_films.get('actor_list', pd.Series(dtype=str)).dropna():
         for a in str(val).split('|'):
@@ -163,20 +224,23 @@ def _diff_actors(df_films: pd.DataFrame) -> list[str]:
             if a:
                 all_actors.add(a)
 
-    if not CAST_ENRICHED_PATH.exists():
-        log.info(f"No cast parquet — {len(all_actors)} actors are new")
-        return sorted(all_actors)
+    done: set[str] = set()
+    if CAST_ENRICHED_PATH.exists():
+        done |= set(
+            pd.read_parquet(CAST_ENRICHED_PATH, columns=['actor_name'])
+            ['actor_name'].astype(str).str.upper().str.strip()
+        )
+    if CAST_CHECKPOINT_PATH.exists():
+        with open(CAST_CHECKPOINT_PATH) as f:
+            done |= {str(k).upper().strip() for k in json.load(f).keys()}
 
-    existing = set(
-        pd.read_parquet(CAST_ENRICHED_PATH, columns=['actor_name'])
-        ['actor_name'].str.upper().str.strip()
-    )
-    new = sorted(all_actors - existing)
-    log.info(f"Cast diff: {len(new)} new actors")
+    new = sorted(all_actors - done)
+    log.info(f"Cast diff: {len(new)} new actors  ({len(done)} already done across parquet+checkpoint)")
     return new
 
 
 def _diff_directors(df_films: pd.DataFrame) -> list[str]:
+    """Directors not yet in director_enriched.parquet OR director_progress.json."""
     all_dirs: set[str] = set()
     for val in df_films.get('director', pd.Series(dtype=str)).dropna():
         # Snowflake pipes; raw parquets sometimes comma — handle both.
@@ -186,21 +250,28 @@ def _diff_directors(df_films: pd.DataFrame) -> list[str]:
             if d:
                 all_dirs.add(d)
 
-    if not DIRECTOR_ENRICHED_PATH.exists():
-        log.info(f"No director parquet — {len(all_dirs)} directors are new")
-        return sorted(all_dirs)
+    done: set[str] = set()
+    if DIRECTOR_ENRICHED_PATH.exists():
+        done |= set(
+            pd.read_parquet(DIRECTOR_ENRICHED_PATH, columns=['director_name'])
+            ['director_name'].astype(str).str.strip()
+        )
+    if DIRECTOR_CHECKPOINT_PATH.exists():
+        with open(DIRECTOR_CHECKPOINT_PATH) as f:
+            done |= {str(k).strip() for k in json.load(f).keys()}
 
-    existing = set(
-        pd.read_parquet(DIRECTOR_ENRICHED_PATH, columns=['director_name'])
-        ['director_name'].str.strip()
-    )
-    new = sorted(all_dirs - existing)
-    log.info(f"Director diff: {len(new)} new directors")
+    new = sorted(all_dirs - done)
+    log.info(f"Director diff: {len(new)} new directors  ({len(done)} already done across parquet+checkpoint)")
     return new
 
 
 def _diff_film_meta(df_films: pd.DataFrame) -> pd.DataFrame:
-    """Film IDs not yet in film_meta_enriched.parquet, with skip-distributor filter applied."""
+    """Films not yet in checkpoint JSON or enriched parquet, with skip-distributor filter applied.
+
+    Checks the checkpoint as well as the parquet so a partially-completed run (where
+    the checkpoint has been written but the final parquet flush has not yet happened)
+    isn't re-extracted.
+    """
     df = df_films.copy()
     n0 = len(df)
     if 'dstbtr' in df.columns:
@@ -208,16 +279,18 @@ def _diff_film_meta(df_films: pd.DataFrame) -> pd.DataFrame:
         if n0 - len(df):
             log.info(f"film_meta skip-distributors: -{n0 - len(df)} → {len(df)}")
 
-    if not FILM_META_ENRICHED_PATH.exists():
-        log.info(f"No film_meta parquet — {len(df)} films are new")
-        return df
+    done_ids: set[int] = set()
+    if FILM_META_CHECKPOINT_PATH.exists():
+        with open(FILM_META_CHECKPOINT_PATH) as f:
+            done_ids |= {int(k) for k in json.load(f)}
+    if FILM_META_ENRICHED_PATH.exists():
+        done_ids |= set(
+            pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id'])
+            ['film_id'].astype(int)
+        )
 
-    existing_ids = set(
-        pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id'])
-        ['film_id'].astype(int)
-    )
-    df = df[~df['film_id'].astype(int).isin(existing_ids)]
-    log.info(f"film_meta diff: {len(df)} films to extract")
+    df = df[~df['film_id'].astype(int).isin(done_ids)]
+    log.info(f"film_meta diff: {len(done_ids)} already done — {len(df)} to extract")
     return df
 
 
@@ -275,8 +348,23 @@ async def _extract_synopses(df: pd.DataFrame) -> None:
 
 
 async def _enrich_cast(new_actors: list[str]) -> None:
+    """Batch-processes actor enrichment with per-batch checkpoint + errors JSON.
+
+    Mirrors _enrich_film_meta: each batch writes cast_progress.json (successes)
+    and cast_errors.json (failures, with already-recovered entries purged). A
+    crash mid-run loses only the in-flight batch. Final step flushes the
+    checkpoint into cast_enriched.parquet.
+    """
     if not new_actors:
         return
+
+    CAST_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint: dict = {}
+    if CAST_CHECKPOINT_PATH.exists():
+        with open(CAST_CHECKPOINT_PATH) as f:
+            checkpoint = json.load(f)
+        log.info(f"Loaded cast checkpoint: {len(checkpoint)} actors already done")
+
     tasks       = load_tasks_from_yaml(CAST_PROMPTS_PATH)
     model       = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
     model_cfg   = MODELS.get(model, {})
@@ -287,29 +375,75 @@ async def _enrich_cast(new_actors: list[str]) -> None:
         cost_per_1m_input=model_cfg.get('cost_per_1m_input'),
         cost_per_1m_output=model_cfg.get('cost_per_1m_output'),
     )
+
     df_actors = pd.DataFrame({'actor_name': new_actors})
+    chunks    = [df_actors.iloc[i:i + META_BATCH_SIZE]
+                 for i in range(0, len(df_actors), META_BATCH_SIZE)]
+    log.info(f"Enriching {len(new_actors)} actors in {len(chunks)} batches of {META_BATCH_SIZE}")
+    prev_cost = 0.0
 
-    log.info(f"Enriching {len(new_actors)} actors")
-    results = await extractor.arun(
-        df=df_actors,
-        name_col='actor_name',
-        max_concurrency=META_MAX_CONCURRENCY,
-    )
+    for batch_num, chunk in enumerate(chunks, 1):
+        log.info(f"Cast batch {batch_num}/{len(chunks)}  ({len(chunk)} actors)")
+        results = await extractor.arun(
+            df=chunk,
+            name_col='actor_name',
+            max_concurrency=META_MAX_CONCURRENCY,
+        )
 
-    rows = []
-    for actor_name, data in results.items():
-        if not data.get('_error'):
-            rows.append({**data, 'actor_name': actor_name})
-    df_new = pd.DataFrame(rows)
+        batch_errors: dict[str, dict] = {}
+        batch_success_keys: set[str] = set()
+        for actor_name, data in results.items():
+            if not data.get('_error'):
+                checkpoint[str(actor_name)] = {**data, 'actor_name': actor_name}
+                batch_success_keys.add(str(actor_name))
+            else:
+                batch_errors[str(actor_name)] = {
+                    'actor_name':  actor_name,
+                    '_error':      data.get('_error'),
+                    '_raw_output': data.get('_raw_output'),
+                }
+
+        with open(CAST_CHECKPOINT_PATH, 'w') as f:
+            json.dump(checkpoint, f, default=str)
+        log.info(f"  Checkpoint saved: {len(checkpoint)} actors → {CAST_CHECKPOINT_PATH}")
+
+        if batch_errors or (batch_success_keys and CAST_ERRORS_PATH.exists()):
+            existing_errors: dict = {}
+            if CAST_ERRORS_PATH.exists():
+                with open(CAST_ERRORS_PATH) as f:
+                    existing_errors = json.load(f)
+            purged_n = sum(1 for k in batch_success_keys
+                           if existing_errors.pop(k, None) is not None)
+            existing_errors.update(batch_errors)
+            if purged_n or batch_errors:
+                with open(CAST_ERRORS_PATH, 'w') as f:
+                    json.dump(existing_errors, f, default=str, indent=2)
+            msg = f"  Errors this batch: {len(batch_errors)}"
+            if purged_n:
+                msg += f"  [purged {purged_n} now-recovered]"
+            msg += f" → {CAST_ERRORS_PATH}"
+            log.info(msg)
+
+        if extractor.token_usage:
+            curr  = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            prev_cost = curr
+            log.info(f"  Batch cost: ${delta:.4f}  |  Run total: ${curr:.4f}")
+
+        if batch_num < len(chunks):
+            await asyncio.sleep(META_BATCH_PAUSE_SECS)
+
+    # ── Flush checkpoint → parquet ────────────────────────────────────────────
+    df_new = pd.DataFrame(checkpoint.values())
     if df_new.empty:
-        log.warning("No cast results produced")
+        log.warning("No cast results in checkpoint")
         return
     df_new = df_new.drop(columns=[c for c in
         ['_error', '_error_message', '_raw_output', 'synopsis', 'title']
         if c in df_new.columns], errors='ignore')
     for col in ['fame_tier', 'fame_source', 'primary_market', 'age_range']:
         if col in df_new.columns:
-            df_new[col] = df_new[col].str.lower().str.strip()
+            df_new[col] = df_new[col].astype(str).str.lower().str.strip()
 
     CAST_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     if CAST_ENRICHED_PATH.exists():
@@ -325,14 +459,27 @@ async def _enrich_cast(new_actors: list[str]) -> None:
         u = extractor.token_usage
         log.info(f"Cast tokens — prompt: {u['prompt_tokens']:,}  "
                  f"completion: {u['completion_tokens']:,}  "
+                 f"searches: {u.get('search_calls', 0):,}  "
                  f"cost: ${u.get('cost_usd', 0):.4f}")
     del extractor
     gc.collect()
 
 
 async def _enrich_directors(new_directors: list[str]) -> None:
+    """Batch-processes director enrichment with per-batch checkpoint + errors JSON.
+
+    Mirrors _enrich_cast / _enrich_film_meta.
+    """
     if not new_directors:
         return
+
+    DIRECTOR_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint: dict = {}
+    if DIRECTOR_CHECKPOINT_PATH.exists():
+        with open(DIRECTOR_CHECKPOINT_PATH) as f:
+            checkpoint = json.load(f)
+        log.info(f"Loaded director checkpoint: {len(checkpoint)} directors already done")
+
     tasks     = load_tasks_from_yaml(DIRECTOR_PROMPTS_PATH)
     model     = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
     model_cfg = MODELS.get(model, {})
@@ -343,29 +490,75 @@ async def _enrich_directors(new_directors: list[str]) -> None:
         cost_per_1m_input=model_cfg.get('cost_per_1m_input'),
         cost_per_1m_output=model_cfg.get('cost_per_1m_output'),
     )
+
     df_dirs = pd.DataFrame({'director_name': new_directors})
+    chunks  = [df_dirs.iloc[i:i + META_BATCH_SIZE]
+               for i in range(0, len(df_dirs), META_BATCH_SIZE)]
+    log.info(f"Enriching {len(new_directors)} directors in {len(chunks)} batches of {META_BATCH_SIZE}")
+    prev_cost = 0.0
 
-    log.info(f"Enriching {len(new_directors)} directors")
-    results = await extractor.arun(
-        df=df_dirs,
-        name_col='director_name',
-        max_concurrency=META_MAX_CONCURRENCY,
-    )
+    for batch_num, chunk in enumerate(chunks, 1):
+        log.info(f"Director batch {batch_num}/{len(chunks)}  ({len(chunk)} directors)")
+        results = await extractor.arun(
+            df=chunk,
+            name_col='director_name',
+            max_concurrency=META_MAX_CONCURRENCY,
+        )
 
-    rows = []
-    for name, data in results.items():
-        if not data.get('_error'):
-            rows.append({**data, 'director_name': name})
-    df_new = pd.DataFrame(rows)
+        batch_errors: dict[str, dict] = {}
+        batch_success_keys: set[str] = set()
+        for name, data in results.items():
+            if not data.get('_error'):
+                checkpoint[str(name)] = {**data, 'director_name': name}
+                batch_success_keys.add(str(name))
+            else:
+                batch_errors[str(name)] = {
+                    'director_name': name,
+                    '_error':        data.get('_error'),
+                    '_raw_output':   data.get('_raw_output'),
+                }
+
+        with open(DIRECTOR_CHECKPOINT_PATH, 'w') as f:
+            json.dump(checkpoint, f, default=str)
+        log.info(f"  Checkpoint saved: {len(checkpoint)} directors → {DIRECTOR_CHECKPOINT_PATH}")
+
+        if batch_errors or (batch_success_keys and DIRECTOR_ERRORS_PATH.exists()):
+            existing_errors: dict = {}
+            if DIRECTOR_ERRORS_PATH.exists():
+                with open(DIRECTOR_ERRORS_PATH) as f:
+                    existing_errors = json.load(f)
+            purged_n = sum(1 for k in batch_success_keys
+                           if existing_errors.pop(k, None) is not None)
+            existing_errors.update(batch_errors)
+            if purged_n or batch_errors:
+                with open(DIRECTOR_ERRORS_PATH, 'w') as f:
+                    json.dump(existing_errors, f, default=str, indent=2)
+            msg = f"  Errors this batch: {len(batch_errors)}"
+            if purged_n:
+                msg += f"  [purged {purged_n} now-recovered]"
+            msg += f" → {DIRECTOR_ERRORS_PATH}"
+            log.info(msg)
+
+        if extractor.token_usage:
+            curr  = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            prev_cost = curr
+            log.info(f"  Batch cost: ${delta:.4f}  |  Run total: ${curr:.4f}")
+
+        if batch_num < len(chunks):
+            await asyncio.sleep(META_BATCH_PAUSE_SECS)
+
+    # ── Flush checkpoint → parquet ────────────────────────────────────────────
+    df_new = pd.DataFrame(checkpoint.values())
     if df_new.empty:
-        log.warning("No director results produced")
+        log.warning("No director results in checkpoint")
         return
     df_new = df_new.drop(columns=[c for c in
         ['_error', '_error_message', '_raw_output', 'synopsis', 'title']
         if c in df_new.columns], errors='ignore')
     for col in ['director_tier', 'primary_market']:
         if col in df_new.columns:
-            df_new[col] = df_new[col].str.lower().str.strip()
+            df_new[col] = df_new[col].astype(str).str.lower().str.strip()
 
     DIRECTOR_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     if DIRECTOR_ENRICHED_PATH.exists():
@@ -381,20 +574,22 @@ async def _enrich_directors(new_directors: list[str]) -> None:
         u = extractor.token_usage
         log.info(f"Director tokens — prompt: {u['prompt_tokens']:,}  "
                  f"completion: {u['completion_tokens']:,}  "
+                 f"searches: {u.get('search_calls', 0):,}  "
                  f"cost: ${u.get('cost_usd', 0):.4f}")
     del extractor
     gc.collect()
 
 
 async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) -> None:
+    """Batch-processes film_meta extraction with per-batch checkpoint + error JSON
+    writes. Mirrors main.py::enrich_film_meta so Dagster runs are safely
+    interruptible — every BATCH_SIZE films, progress is persisted to disk."""
     if df.empty:
         return
 
-    # Optional re-release filter — non-fatal if cinema_admits_models isn't on path.
     if film_lookup is not None and 'rel_at' in film_lookup.columns:
         try:
-            sys.path.insert(0, '/Users/jonathanchapman/Documents/git/cinema_admits_models')
-            from re_release_filter import ReReleaseFilter
+            from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter
             rr = ReReleaseFilter()
             flagged = rr.flag(df.rename(columns={'film_title': 'film'}),
                               film_lookup, title_col='film')
@@ -410,6 +605,21 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
     if df.empty:
         return
 
+    FILM_META_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if FILM_META_CHECKPOINT_PATH.exists():
+        with open(FILM_META_CHECKPOINT_PATH) as f:
+            checkpoint: dict = json.load(f)
+        log.info(f"Loaded film_meta checkpoint: {len(checkpoint)} films already done")
+    else:
+        checkpoint = {}
+
+    done_ids = {int(k) for k in checkpoint}
+    df = df[~df['film_id'].astype(int).isin(done_ids)].copy()
+    log.info(f"film_meta: {len(done_ids)} in checkpoint — {len(df)} to extract")
+    if df.empty:
+        log.info("film_meta enrichment up to date.")
+        return
+
     evt_passthrough = (
         df.set_index('film_id')[['dstbtr', 'rel_at']]
         .rename(columns={'dstbtr': 'evt_dstbtr', 'rel_at': 'evt_rel_at'})
@@ -423,35 +633,91 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
         api_key=os.getenv('OPENAI_KEY'),
         cost_per_1m_input=model_cfg.get('cost_per_1m_input'),
         cost_per_1m_output=model_cfg.get('cost_per_1m_output'),
+        # Film budgets come from a diverse set (The Numbers, Box Office Mojo,
+        # Variety, Bollywood trades) — ~45% of citations are outside wiki+imdb.
+        # Override the env-level allow-list to None so film_meta can escalate
+        # beyond wiki/imdb. The prompt nudges it to TRY wiki/imdb first.
+        web_search_domains=None,
     )
 
-    log.info(f"Extracting film_meta for {len(df)} films")
-    results = await extractor.arun(
-        df=df,
-        id_col='film_id',
-        title_col='film_title',
-        rel_at_col='rel_at',
-        director_col='director',
-        synopsis_col='synopsis',
-        max_concurrency=META_MAX_CONCURRENCY,
-    )
+    chunks = [df.iloc[i:i + META_BATCH_SIZE] for i in range(0, len(df), META_BATCH_SIZE)]
+    prev_cost = 0.0
+    for batch_num, chunk in enumerate(chunks, 1):
+        log.info(f"film_meta batch {batch_num}/{len(chunks)}  ({len(chunk)} films)")
+        results = await extractor.arun(
+            df=chunk,
+            id_col='film_id',
+            title_col='film_title',
+            rel_at_col='rel_at',
+            director_col='director',
+            synopsis_col='synopsis',
+            max_concurrency=META_MAX_CONCURRENCY,
+        )
 
-    rows = []
-    for film_id, data in results.items():
-        if data.get('_error'):
-            continue
-        data = dict(data)
-        data['film_id'] = film_id
-        pt = evt_passthrough.get(film_id, {})
-        data['evt_dstbtr'] = str(pt.get('evt_dstbtr')) if pd.notna(pt.get('evt_dstbtr')) else None
-        data['evt_rel_at'] = str(pt.get('evt_rel_at')) if pd.notna(pt.get('evt_rel_at')) else None
-        rows.append(data)
-    df_new = pd.DataFrame(rows)
-    if df_new.empty:
-        log.warning("No film_meta results produced")
-        return
-    df_new = df_new.drop(columns=[c for c in ['_error', '_raw_output']
-                                  if c in df_new.columns], errors='ignore')
+        title_lookup = chunk.set_index('film_id')['film_title'].to_dict()
+        batch_errors: dict[str, dict] = {}
+        batch_success_ids: set[str] = set()
+        for film_id, data in results.items():
+            if not data.get('_error'):
+                data['film_id'] = film_id
+                pt = evt_passthrough.get(film_id, {})
+                data['evt_dstbtr'] = str(pt.get('evt_dstbtr')) if pd.notna(pt.get('evt_dstbtr')) else None
+                data['evt_rel_at'] = str(pt.get('evt_rel_at')) if pd.notna(pt.get('evt_rel_at')) else None
+                checkpoint[str(film_id)] = data
+                batch_success_ids.add(str(film_id))
+            else:
+                batch_errors[str(film_id)] = {
+                    'film_id':     film_id,
+                    'film_title':  title_lookup.get(film_id),
+                    '_error':      data.get('_error'),
+                    '_raw_output': data.get('_raw_output'),
+                }
+
+        with open(FILM_META_CHECKPOINT_PATH, 'w') as f:
+            json.dump(checkpoint, f, default=str)
+        log.info(f"  Checkpoint saved: {len(checkpoint)} films → {FILM_META_CHECKPOINT_PATH}")
+
+        # Errors JSON: merge in new errors AND drop entries for films that just
+        # succeeded (covers both this batch's wins and stale entries from prior
+        # runs that have since recovered).
+        if batch_errors or (batch_success_ids and FILM_META_ERRORS_PATH.exists()):
+            existing_errors: dict = {}
+            if FILM_META_ERRORS_PATH.exists():
+                with open(FILM_META_ERRORS_PATH) as f:
+                    existing_errors = json.load(f)
+            purged_n = sum(1 for fid in batch_success_ids
+                           if existing_errors.pop(fid, None) is not None)
+            existing_errors.update(batch_errors)
+            if purged_n or batch_errors:
+                with open(FILM_META_ERRORS_PATH, 'w') as f:
+                    json.dump(existing_errors, f, default=str, indent=2)
+            err_counts: dict[str, int] = {}
+            for v in batch_errors.values():
+                key = str(v.get('_error', 'unknown')).split(':')[0][:40]
+                err_counts[key] = err_counts.get(key, 0) + 1
+            msg = f"  Errors this batch: {len(batch_errors)}"
+            if err_counts:
+                msg += f" ({', '.join(f'{k}={n}' for k, n in err_counts.items())})"
+            if purged_n:
+                msg += f"  [purged {purged_n} now-recovered]"
+            msg += f" → {FILM_META_ERRORS_PATH}"
+            log.info(msg)
+
+        if extractor.token_usage:
+            curr  = extractor.token_usage.get('cost_usd', 0.0)
+            delta = curr - prev_cost
+            prev_cost = curr
+            log.info(f"  Batch cost: ${delta:.4f}  |  Run total: ${curr:.4f}")
+
+        if batch_num < len(chunks):
+            await asyncio.sleep(META_BATCH_PAUSE_SECS)
+
+    df_new = pd.DataFrame(checkpoint.values())
+    if '_error' in df_new.columns:
+        df_new = df_new[df_new['_error'].isna()].drop(
+            columns=[c for c in ['_error', '_raw_output'] if c in df_new.columns],
+            errors='ignore',
+        )
 
     FILM_META_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     if FILM_META_ENRICHED_PATH.exists():
@@ -467,6 +733,7 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
         u = extractor.token_usage
         log.info(f"film_meta tokens — prompt: {u['prompt_tokens']:,}  "
                  f"completion: {u['completion_tokens']:,}  "
+                 f"searches: {u.get('search_calls', 0):,}  "
                  f"cost: ${u.get('cost_usd', 0):.4f}")
     del extractor
     gc.collect()
@@ -554,10 +821,10 @@ def refresh_film_meta(df_films: pd.DataFrame | None = None, force: bool = False)
     if df.empty:
         return {'path': 'film_meta', 'updated': False, 'reason': 'up_to_date'}
 
-    # film_lookup for the re-release filter — uses the full Snowflake set.
-    film_lookup = df_films.rename(columns={'film_title': 'film'})[
-        [c for c in ['film_id', 'film', 'rel_at', 'dstbtr', 'director'] if c in df_films.columns or c == 'film']
-    ].copy()
+    # film_lookup for the re-release filter — pulls the FULL Snowflake catalogue,
+    # not just the curated work-set, so older releases outside the parquet
+    # snapshot window are still available for title matching.
+    film_lookup = load_full_film_catalogue()
 
     asyncio.run(_enrich_film_meta(df, film_lookup))
     return {'path': 'film_meta', 'updated': True, 'films_extracted': len(df)}

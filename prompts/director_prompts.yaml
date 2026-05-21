@@ -50,4 +50,9 @@ tasks:
       - Use your knowledge about this person. You are NOT limited to any provided text.
       - If you genuinely do not recognise the name, return all "unknown" fields.
       - Do not guess or fabricate details about people you don't know.
+      - SEARCH BUDGET: perform AT MOST ONE web_search per director. Use the
+        Wikipedia or IMDb page returned and extract both fields from that
+        single result. Do NOT do follow-up searches.
+      - Do NOT append source citations or URL annotations to field values.
+        Values must be the bare enum string only.
       - Output ONLY valid JSON. No explanations. No backticks.

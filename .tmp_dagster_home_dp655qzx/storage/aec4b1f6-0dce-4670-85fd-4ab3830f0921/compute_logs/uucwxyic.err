@@ -1,0 +1,133 @@
+[32m2026-05-21 14:59:54 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - 96837 - LOGS_CAPTURED - Capturing logs for process (pid: 96837).
+[32m2026-05-21 14:59:54 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - 96837 - cast - STEP_START - Started execution of step "cast".
+2026-05-21 14:59:54  INFO  Context impl SQLiteImpl.
+2026-05-21 14:59:54  INFO  Will assume non-transactional DDL.
+[32m2026-05-21 14:59:54 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - cast - Loading file from: /Users/jonathanchapman/Documents/git/film_synopsis_meta/.tmp_dagster_home_dp655qzx/storage/films_source using PickledObjectFilesystemIOManager...
+[32m2026-05-21 14:59:54 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - 96837 - cast - LOADED_INPUT - Loaded input "films_source" using input manager "io_manager"
+[32m2026-05-21 14:59:54 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - 96837 - cast - STEP_INPUT - Got input "films_source" of type "DataFrame". (Type check passed).
+2026-05-21 14:59:54  INFO  Cast diff: 4451 new actors  (5743 already done across parquet+checkpoint)
+2026-05-21 14:59:54  INFO  Loaded cast checkpoint: 5743 actors already done
+2026-05-21 14:59:54  INFO  Enriching 4451 actors in 179 batches of 25
+2026-05-21 14:59:54  INFO  Cast batch 1/179  (25 actors)
+2026-05-21 14:59:56  INFO  Retrying request to /responses in 0.436228 seconds
+2026-05-21 14:59:56  INFO  Retrying request to /responses in 0.482018 seconds
+2026-05-21 14:59:57  INFO  Retrying request to /responses in 0.874228 seconds
+2026-05-21 14:59:57  INFO  Retrying request to /responses in 0.814709 seconds
+2026-05-21 14:59:58  INFO  Retrying request to /responses in 1.737410 seconds
+2026-05-21 14:59:58  INFO  Retrying request to /responses in 1.589106 seconds
+2026-05-21 15:00:00  INFO  Retrying request to /responses in 3.672066 seconds
+2026-05-21 15:00:00  INFO  Retrying request to /responses in 3.408005 seconds
+2026-05-21 15:00:04  INFO  Retrying request to /responses in 7.707314 seconds
+2026-05-21 15:00:04  INFO  Retrying request to /responses in 6.563518 seconds
+2026-05-21 15:00:12  INFO  Retrying request to /responses in 7.918783 seconds
+2026-05-21 15:00:13  INFO  Retrying request to /responses in 7.378619 seconds
+2026-05-21 15:00:20  INFO  Retrying request to /responses in 6.583125 seconds
+2026-05-21 15:00:23  INFO  Retrying request to /responses in 6.750514 seconds
+2026-05-21 15:00:27  INFO  Retrying request to /responses in 7.955742 seconds
+2026-05-21 15:00:30  INFO  Retrying request to /responses in 7.911447 seconds
+2026-05-21 15:00:36  INFO  Retrying request to /responses in 0.499432 seconds
+2026-05-21 15:00:37  INFO  Retrying request to /responses in 0.991963 seconds
+2026-05-21 15:00:39  INFO  Retrying request to /responses in 0.407861 seconds
+2026-05-21 15:00:39  INFO  Retrying request to /responses in 1.731256 seconds
+2026-05-21 15:00:39  INFO  Retrying request to /responses in 0.846834 seconds
+2026-05-21 15:00:41  INFO  Retrying request to /responses in 3.998508 seconds
+2026-05-21 15:00:43  INFO  Retrying request to /responses in 1.526588 seconds
+2026-05-21 15:00:46  INFO  Retrying request to /responses in 3.821592 seconds
+2026-05-21 15:00:47  INFO  Retrying request to /responses in 7.090556 seconds
+2026-05-21 15:00:50  INFO  Retrying request to /responses in 7.860250 seconds
+2026-05-21 15:00:55  INFO  Retrying request to /responses in 7.584971 seconds
+2026-05-21 15:00:58  INFO  Retrying request to /responses in 6.081566 seconds
+2026-05-21 15:01:03  INFO  Retrying request to /responses in 7.560559 seconds
+2026-05-21 15:01:05  INFO  Retrying request to /responses in 7.628840 seconds
+2026-05-21 15:01:11  INFO  Retrying request to /responses in 6.859851 seconds
+2026-05-21 15:01:13  INFO  Retrying request to /responses in 6.056736 seconds
+2026-05-21 15:01:19  INFO  Retrying request to /responses in 0.399941 seconds
+2026-05-21 15:01:20  INFO  Retrying request to /responses in 0.783156 seconds
+2026-05-21 15:01:20  INFO  Retrying request to /responses in 0.389701 seconds
+2026-05-21 15:01:21  INFO  Retrying request to /responses in 0.946187 seconds
+2026-05-21 15:01:22  INFO  Retrying request to /responses in 1.948796 seconds
+2026-05-21 15:01:23  INFO  Retrying request to /responses in 1.989090 seconds
+2026-05-21 15:01:24  INFO  Retrying request to /responses in 3.292138 seconds
+2026-05-21 15:01:25  INFO  Retrying request to /responses in 3.390891 seconds
+2026-05-21 15:01:28  INFO  Retrying request to /responses in 6.885570 seconds
+2026-05-21 15:01:29  INFO  Retrying request to /responses in 7.290755 seconds
+2026-05-21 15:01:36  INFO  Retrying request to /responses in 6.647187 seconds
+2026-05-21 15:01:37  INFO  Retrying request to /responses in 6.984713 seconds
+2026-05-21 15:01:43  INFO  Retrying request to /responses in 7.749903 seconds
+2026-05-21 15:01:44  INFO  Retrying request to /responses in 6.762026 seconds
+2026-05-21 15:01:52  INFO  Retrying request to /responses in 6.779335 seconds
+2026-05-21 15:01:52  INFO  Retrying request to /responses in 7.578242 seconds
+2026-05-21 15:02:00  INFO  Retrying request to /responses in 0.421290 seconds
+2026-05-21 15:02:01  INFO  Retrying request to /responses in 0.990906 seconds
+2026-05-21 15:02:01  INFO  Retrying request to /responses in 0.384261 seconds
+2026-05-21 15:02:03  INFO  Retrying request to /responses in 0.886776 seconds
+2026-05-21 15:02:04  INFO  Retrying request to /responses in 1.863234 seconds
+2026-05-21 15:02:04  INFO  Retrying request to /responses in 1.984033 seconds
+2026-05-21 15:02:07  INFO  Retrying request to /responses in 3.604394 seconds
+2026-05-21 15:02:07  INFO  Retrying request to /responses in 3.460631 seconds
+2026-05-21 15:02:11  INFO  Retrying request to /responses in 7.910387 seconds
+2026-05-21 15:02:11  INFO  Retrying request to /responses in 6.554647 seconds
+2026-05-21 15:02:18  INFO  Retrying request to /responses in 6.012482 seconds
+2026-05-21 15:02:19  INFO  Retrying request to /responses in 6.754624 seconds
+2026-05-21 15:02:25  INFO  Retrying request to /responses in 6.455316 seconds
+2026-05-21 15:02:26  INFO  Retrying request to /responses in 6.050569 seconds
+2026-05-21 15:02:32  INFO  Retrying request to /responses in 6.411126 seconds
+2026-05-21 15:02:33  INFO  Retrying request to /responses in 7.120271 seconds
+2026-05-21 15:02:40  INFO  Retrying request to /responses in 0.447988 seconds
+2026-05-21 15:02:41  INFO  Retrying request to /responses in 0.999567 seconds
+2026-05-21 15:02:41  INFO  Retrying request to /responses in 0.396254 seconds
+2026-05-21 15:02:42  INFO  Retrying request to /responses in 1.845544 seconds
+2026-05-21 15:02:42  INFO  Retrying request to /responses in 0.935930 seconds
+2026-05-21 15:02:45  INFO  Retrying request to /responses in 3.772937 seconds
+2026-05-21 15:02:45  INFO  Retrying request to /responses in 1.616855 seconds
+2026-05-21 15:02:47  INFO  Retrying request to /responses in 3.148956 seconds
+[32m2026-05-21 15:02:48 +1000[0m - dagster - [34mERROR[0m - [31m__ASSET_JOB - aec4b1f6-0dce-4670-85fd-4ab3830f0921 - 96837 - cast - STEP_FAILURE - Execution of step "cast" failed.
+
+dagster._core.errors.DagsterExecutionInterruptedError
+
+Stack Trace:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_plan.py", line 243, in dagster_event_sequence_for_step
+    yield from check.generator(step_events)
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 505, in core_dagster_event_sequence_for_step
+    for user_event in _step_output_error_checked_user_event_sequence(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 184, in _step_output_error_checked_user_event_sequence
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 88, in _process_asset_results_to_events
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 188, in execute_core_compute
+    for step_output in _yield_compute_results(step_context, inputs, compute_fn, compute_context):
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 157, in _yield_compute_results
+    for event in iterate_with_context(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/__init__.py", line 394, in iterate_with_context
+    next_output = next(iterator)
+                  ^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 135, in _coerce_op_compute_fn_to_iterator
+    result = invoke_compute_fn(
+             ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 115, in invoke_compute_fn
+    return fn(context, **args_to_pass) if context_arg_provided else fn(**args_to_pass)
+                                                                    ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/dagster_defs.py", line 45, in cast
+    return refresh_cast(films_source)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/refresh.py", line 773, in refresh_cast
+    asyncio.run(_enrich_cast(new_actors))
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 641, in run_until_complete
+    self.run_forever()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 608, in run_forever
+    self._run_once()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 1898, in _run_once
+    event_list = self._selector.select(timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/selectors.py", line 566, in select
+    kev_list = self._selector.control(None, max_ev, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/interrupts.py", line 81, in _new_signal_handler
+    raise error_cls()
+[0m

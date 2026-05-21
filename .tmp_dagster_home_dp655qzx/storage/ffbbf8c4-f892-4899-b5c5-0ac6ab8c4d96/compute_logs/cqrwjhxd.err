@@ -1,0 +1,73 @@
+[32m2026-05-21 14:52:40 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - 96280 - LOGS_CAPTURED - Capturing logs for process (pid: 96280).
+[32m2026-05-21 14:52:40 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - 96280 - cast - STEP_START - Started execution of step "cast".
+2026-05-21 14:52:40  INFO  Context impl SQLiteImpl.
+2026-05-21 14:52:40  INFO  Will assume non-transactional DDL.
+[32m2026-05-21 14:52:40 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - cast - Loading file from: /Users/jonathanchapman/Documents/git/film_synopsis_meta/.tmp_dagster_home_dp655qzx/storage/films_source using PickledObjectFilesystemIOManager...
+[32m2026-05-21 14:52:40 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - 96280 - cast - LOADED_INPUT - Loaded input "films_source" using input manager "io_manager"
+[32m2026-05-21 14:52:40 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - 96280 - cast - STEP_INPUT - Got input "films_source" of type "DataFrame". (Type check passed).
+2026-05-21 14:52:40  INFO  Cast diff: 4451 new actors  (5743 already done across parquet+checkpoint)
+2026-05-21 14:52:40  INFO  Loaded cast checkpoint: 5743 actors already done
+2026-05-21 14:52:40  INFO  Enriching 4451 actors in 179 batches of 25
+2026-05-21 14:52:40  INFO  Cast batch 1/179  (25 actors)
+2026-05-21 14:52:42  INFO  Retrying request to /responses in 0.434027 seconds
+2026-05-21 14:52:42  INFO  Retrying request to /responses in 0.417630 seconds
+2026-05-21 14:52:43  INFO  Retrying request to /responses in 0.922900 seconds
+2026-05-21 14:52:43  INFO  Retrying request to /responses in 0.898542 seconds
+2026-05-21 14:52:44  INFO  Retrying request to /responses in 1.712232 seconds
+2026-05-21 14:52:44  INFO  Retrying request to /responses in 1.653917 seconds
+2026-05-21 14:52:46  INFO  Retrying request to /responses in 3.914097 seconds
+2026-05-21 14:52:47  INFO  Retrying request to /responses in 3.065021 seconds
+2026-05-21 14:52:50  INFO  Retrying request to /responses in 7.085201 seconds
+2026-05-21 14:52:51  INFO  Retrying request to /responses in 6.997584 seconds
+2026-05-21 14:52:58  INFO  Retrying request to /responses in 6.800087 seconds
+2026-05-21 14:52:58  INFO  Retrying request to /responses in 6.391951 seconds
+[32m2026-05-21 14:53:01 +1000[0m - dagster - [34mERROR[0m - [31m__ASSET_JOB - ffbbf8c4-f892-4899-b5c5-0ac6ab8c4d96 - 96280 - cast - STEP_FAILURE - Execution of step "cast" failed.
+
+dagster._core.errors.DagsterExecutionInterruptedError
+
+Stack Trace:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_plan.py", line 243, in dagster_event_sequence_for_step
+    yield from check.generator(step_events)
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 505, in core_dagster_event_sequence_for_step
+    for user_event in _step_output_error_checked_user_event_sequence(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 184, in _step_output_error_checked_user_event_sequence
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 88, in _process_asset_results_to_events
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 188, in execute_core_compute
+    for step_output in _yield_compute_results(step_context, inputs, compute_fn, compute_context):
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 157, in _yield_compute_results
+    for event in iterate_with_context(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/__init__.py", line 394, in iterate_with_context
+    next_output = next(iterator)
+                  ^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 135, in _coerce_op_compute_fn_to_iterator
+    result = invoke_compute_fn(
+             ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 115, in invoke_compute_fn
+    return fn(context, **args_to_pass) if context_arg_provided else fn(**args_to_pass)
+                                                                    ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/dagster_defs.py", line 45, in cast
+    return refresh_cast(films_source)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/refresh.py", line 773, in refresh_cast
+    asyncio.run(_enrich_cast(new_actors))
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 641, in run_until_complete
+    self.run_forever()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 608, in run_forever
+    self._run_once()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 1898, in _run_once
+    event_list = self._selector.select(timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/selectors.py", line 566, in select
+    kev_list = self._selector.control(None, max_ev, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/interrupts.py", line 81, in _new_signal_handler
+    raise error_cls()
+[0m

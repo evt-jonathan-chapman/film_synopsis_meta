@@ -189,6 +189,20 @@ tasks:
 
       - Use web_search to ground EVERY field. Do not rely on training-data memory
         for cast, studios, budgets, or trailer URLs.
+      - SEARCH BUDGET: perform AT MOST TWO web_search calls per film, ideally
+        just ONE. The per-call search fee dominates total cost — one good
+        search is cheaper and almost as accurate as five narrower ones.
+        Strategy:
+          1. FIRST search: target the canonical Wikipedia / IMDb page in one go
+             (e.g. '<title> <year> film Wikipedia'). Read the returned page(s)
+             and extract ALL fields from those results.
+          2. SECOND search (only if needed): if the first search returned
+             nothing useful, OR if the budget figure is missing and the film is
+             a major studio release likely to be reported by trade press,
+             ONE more search targeting Variety / Deadline / The Numbers / Box
+             Office Mojo is permitted.
+        Do NOT do a third search. Do NOT search to verify single fields. If
+        after two searches a field is still unknown, return null / [] / "unknown".
       - For unreleased films, return what is publicly announced; mark unverified
         fields as null / [].
       - If you cannot verify a field from at least one authoritative source,

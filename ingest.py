@@ -10,7 +10,7 @@ from snowflake.connector.pandas_tools import write_pandas
 from sqlalchemy import text
 
 from tools.connections import SnowflakeDB
-from synopses import sql
+import sql
 
 
 def to_ndarray(v: Any) -> np.ndarray:

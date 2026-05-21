@@ -1,0 +1,392 @@
+[32m2026-05-21 13:44:32 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - 91327 - LOGS_CAPTURED - Capturing logs for process (pid: 91327).
+[32m2026-05-21 13:44:32 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - 91327 - cast - STEP_START - Started execution of step "cast".
+2026-05-21 13:44:32  INFO  Context impl SQLiteImpl.
+2026-05-21 13:44:32  INFO  Will assume non-transactional DDL.
+[32m2026-05-21 13:44:32 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - cast - Loading file from: /Users/jonathanchapman/Documents/git/film_synopsis_meta/.tmp_dagster_home_dp655qzx/storage/films_source using PickledObjectFilesystemIOManager...
+[32m2026-05-21 13:44:32 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - 91327 - cast - LOADED_INPUT - Loaded input "films_source" using input manager "io_manager"
+[32m2026-05-21 13:44:32 +1000[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - 91327 - cast - STEP_INPUT - Got input "films_source" of type "DataFrame". (Type check passed).
+2026-05-21 13:44:32  INFO  Cast diff: 6726 new actors  (3468 already done across parquet+checkpoint)
+2026-05-21 13:44:32  INFO  Loaded cast checkpoint: 3468 actors already done
+2026-05-21 13:44:32  INFO  Enriching 6726 actors in 270 batches of 25
+2026-05-21 13:44:32  INFO  Cast batch 1/270  (25 actors)
+2026-05-21 13:45:11  INFO    Checkpoint saved: 3493 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:45:11  INFO    Batch cost: $0.0572  |  Run total: $0.0572
+2026-05-21 13:45:14  INFO  Cast batch 2/270  (25 actors)
+2026-05-21 13:45:49  INFO    Checkpoint saved: 3518 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:45:49  INFO    Batch cost: $0.0558  |  Run total: $0.1129
+2026-05-21 13:45:52  INFO  Cast batch 3/270  (25 actors)
+2026-05-21 13:46:38  INFO    Checkpoint saved: 3543 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:46:38  INFO    Batch cost: $0.0618  |  Run total: $0.1747
+2026-05-21 13:46:41  INFO  Cast batch 4/270  (25 actors)
+2026-05-21 13:47:16  INFO    Checkpoint saved: 3568 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:47:16  INFO    Batch cost: $0.0529  |  Run total: $0.2276
+2026-05-21 13:47:19  INFO  Cast batch 5/270  (25 actors)
+2026-05-21 13:47:54  INFO    Checkpoint saved: 3593 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:47:54  INFO    Batch cost: $0.0534  |  Run total: $0.2810
+2026-05-21 13:47:57  INFO  Cast batch 6/270  (25 actors)
+2026-05-21 13:48:38  INFO    Checkpoint saved: 3618 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:48:38  INFO    Batch cost: $0.0556  |  Run total: $0.3367
+2026-05-21 13:48:41  INFO  Cast batch 7/270  (25 actors)
+2026-05-21 13:49:11  INFO    Checkpoint saved: 3643 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:49:11  INFO    Batch cost: $0.0484  |  Run total: $0.3850
+2026-05-21 13:49:14  INFO  Cast batch 8/270  (25 actors)
+2026-05-21 13:49:51  INFO    Checkpoint saved: 3668 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:49:51  INFO    Batch cost: $0.0525  |  Run total: $0.4375
+2026-05-21 13:49:54  INFO  Cast batch 9/270  (25 actors)
+2026-05-21 13:50:31  INFO    Checkpoint saved: 3693 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:50:31  INFO    Batch cost: $0.0571  |  Run total: $0.4946
+2026-05-21 13:50:34  INFO  Cast batch 10/270  (25 actors)
+2026-05-21 13:51:01  INFO    Checkpoint saved: 3718 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:51:01  INFO    Batch cost: $0.0463  |  Run total: $0.5409
+2026-05-21 13:51:04  INFO  Cast batch 11/270  (25 actors)
+2026-05-21 13:51:33  INFO    Checkpoint saved: 3743 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:51:33  INFO    Batch cost: $0.0479  |  Run total: $0.5889
+2026-05-21 13:51:36  INFO  Cast batch 12/270  (25 actors)
+2026-05-21 13:52:06  INFO    Checkpoint saved: 3768 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:52:06  INFO    Batch cost: $0.0472  |  Run total: $0.6360
+2026-05-21 13:52:09  INFO  Cast batch 13/270  (25 actors)
+2026-05-21 13:52:42  INFO    Checkpoint saved: 3793 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:52:42  INFO    Batch cost: $0.0474  |  Run total: $0.6834
+2026-05-21 13:52:45  INFO  Cast batch 14/270  (25 actors)
+2026-05-21 13:53:27  INFO    Checkpoint saved: 3818 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:53:27  INFO    Batch cost: $0.0560  |  Run total: $0.7394
+2026-05-21 13:53:30  INFO  Cast batch 15/270  (25 actors)
+2026-05-21 13:54:17  INFO    Checkpoint saved: 3843 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:54:17  INFO    Batch cost: $0.0626  |  Run total: $0.8020
+2026-05-21 13:54:20  INFO  Cast batch 16/270  (25 actors)
+2026-05-21 13:54:54  INFO    Checkpoint saved: 3868 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:54:54  INFO    Batch cost: $0.0505  |  Run total: $0.8525
+2026-05-21 13:54:57  INFO  Cast batch 17/270  (25 actors)
+2026-05-21 13:55:33  INFO    Checkpoint saved: 3893 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:55:33  INFO    Batch cost: $0.0526  |  Run total: $0.9051
+2026-05-21 13:55:36  INFO  Cast batch 18/270  (25 actors)
+2026-05-21 13:56:11  INFO    Checkpoint saved: 3918 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:56:11  INFO    Batch cost: $0.0480  |  Run total: $0.9531
+2026-05-21 13:56:14  INFO  Cast batch 19/270  (25 actors)
+2026-05-21 13:56:49  INFO    Checkpoint saved: 3943 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:56:49  INFO    Batch cost: $0.0502  |  Run total: $1.0033
+2026-05-21 13:56:52  INFO  Cast batch 20/270  (25 actors)
+2026-05-21 13:57:27  INFO    Checkpoint saved: 3968 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:57:27  INFO    Batch cost: $0.0553  |  Run total: $1.0585
+2026-05-21 13:57:30  INFO  Cast batch 21/270  (25 actors)
+2026-05-21 13:58:08  INFO    Checkpoint saved: 3993 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:58:08  INFO    Batch cost: $0.0543  |  Run total: $1.1128
+2026-05-21 13:58:11  INFO  Cast batch 22/270  (25 actors)
+2026-05-21 13:58:44  INFO    Checkpoint saved: 4018 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:58:44  INFO    Batch cost: $0.0511  |  Run total: $1.1639
+2026-05-21 13:58:47  INFO  Cast batch 23/270  (25 actors)
+2026-05-21 13:59:25  INFO    Checkpoint saved: 4043 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 13:59:25  INFO    Batch cost: $0.0562  |  Run total: $1.2201
+2026-05-21 13:59:28  INFO  Cast batch 24/270  (25 actors)
+2026-05-21 14:00:02  INFO    Checkpoint saved: 4068 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:00:02  INFO    Batch cost: $0.0460  |  Run total: $1.2661
+2026-05-21 14:00:05  INFO  Cast batch 25/270  (25 actors)
+2026-05-21 14:00:50  INFO    Checkpoint saved: 4093 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:00:50  INFO    Batch cost: $0.0608  |  Run total: $1.3269
+2026-05-21 14:00:53  INFO  Cast batch 26/270  (25 actors)
+2026-05-21 14:01:33  INFO    Checkpoint saved: 4118 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:01:33  INFO    Batch cost: $0.0587  |  Run total: $1.3855
+2026-05-21 14:01:36  INFO  Cast batch 27/270  (25 actors)
+2026-05-21 14:02:19  INFO    Checkpoint saved: 4143 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:02:19  INFO    Batch cost: $0.0554  |  Run total: $1.4409
+2026-05-21 14:02:22  INFO  Cast batch 28/270  (25 actors)
+2026-05-21 14:03:04  INFO    Checkpoint saved: 4168 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:03:04  INFO    Batch cost: $0.0554  |  Run total: $1.4963
+2026-05-21 14:03:07  INFO  Cast batch 29/270  (25 actors)
+2026-05-21 14:03:40  INFO    Checkpoint saved: 4193 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:03:40  INFO    Batch cost: $0.0450  |  Run total: $1.5414
+2026-05-21 14:03:43  INFO  Cast batch 30/270  (25 actors)
+2026-05-21 14:04:16  INFO    Checkpoint saved: 4218 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:04:16  INFO    Batch cost: $0.0490  |  Run total: $1.5904
+2026-05-21 14:04:19  INFO  Cast batch 31/270  (25 actors)
+2026-05-21 14:04:58  INFO    Checkpoint saved: 4243 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:04:58  INFO    Batch cost: $0.0593  |  Run total: $1.6496
+2026-05-21 14:05:01  INFO  Cast batch 32/270  (25 actors)
+2026-05-21 14:05:43  INFO    Checkpoint saved: 4268 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:05:43  INFO    Batch cost: $0.0588  |  Run total: $1.7084
+2026-05-21 14:05:46  INFO  Cast batch 33/270  (25 actors)
+2026-05-21 14:06:17  INFO    Checkpoint saved: 4293 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:06:17  INFO    Batch cost: $0.0503  |  Run total: $1.7587
+2026-05-21 14:06:20  INFO  Cast batch 34/270  (25 actors)
+2026-05-21 14:06:55  INFO    Checkpoint saved: 4318 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:06:55  INFO    Batch cost: $0.0491  |  Run total: $1.8078
+2026-05-21 14:06:58  INFO  Cast batch 35/270  (25 actors)
+2026-05-21 14:07:34  INFO    Checkpoint saved: 4343 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:07:34  INFO    Batch cost: $0.0490  |  Run total: $1.8568
+2026-05-21 14:07:37  INFO  Cast batch 36/270  (25 actors)
+2026-05-21 14:08:15  INFO    Checkpoint saved: 4368 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:08:15  INFO    Batch cost: $0.0553  |  Run total: $1.9121
+2026-05-21 14:08:18  INFO  Cast batch 37/270  (25 actors)
+2026-05-21 14:08:51  INFO    Checkpoint saved: 4393 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:08:51  INFO    Batch cost: $0.0509  |  Run total: $1.9630
+2026-05-21 14:08:54  INFO  Cast batch 38/270  (25 actors)
+2026-05-21 14:09:23  INFO    Checkpoint saved: 4418 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:09:23  INFO    Batch cost: $0.0481  |  Run total: $2.0112
+2026-05-21 14:09:26  INFO  Cast batch 39/270  (25 actors)
+2026-05-21 14:10:04  INFO    Checkpoint saved: 4443 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:10:04  INFO    Batch cost: $0.0544  |  Run total: $2.0656
+2026-05-21 14:10:07  INFO  Cast batch 40/270  (25 actors)
+2026-05-21 14:10:48  INFO    Checkpoint saved: 4468 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:10:48  INFO    Batch cost: $0.0585  |  Run total: $2.1241
+2026-05-21 14:10:51  INFO  Cast batch 41/270  (25 actors)
+2026-05-21 14:11:23  INFO    Checkpoint saved: 4493 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:11:23  INFO    Batch cost: $0.0517  |  Run total: $2.1759
+2026-05-21 14:11:26  INFO  Cast batch 42/270  (25 actors)
+2026-05-21 14:12:07  INFO    Checkpoint saved: 4518 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:12:07  INFO    Batch cost: $0.0588  |  Run total: $2.2347
+2026-05-21 14:12:10  INFO  Cast batch 43/270  (25 actors)
+2026-05-21 14:13:00  INFO    Checkpoint saved: 4543 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:13:00  INFO    Batch cost: $0.0503  |  Run total: $2.2850
+2026-05-21 14:13:03  INFO  Cast batch 44/270  (25 actors)
+2026-05-21 14:13:55  INFO    Checkpoint saved: 4568 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:13:55  INFO    Batch cost: $0.0664  |  Run total: $2.3514
+2026-05-21 14:13:58  INFO  Cast batch 45/270  (25 actors)
+2026-05-21 14:14:30  INFO    Checkpoint saved: 4593 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:14:30  INFO    Batch cost: $0.0486  |  Run total: $2.4001
+2026-05-21 14:14:33  INFO  Cast batch 46/270  (25 actors)
+2026-05-21 14:15:14  INFO    Checkpoint saved: 4618 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:15:14  INFO    Batch cost: $0.0559  |  Run total: $2.4559
+2026-05-21 14:15:17  INFO  Cast batch 47/270  (25 actors)
+2026-05-21 14:15:50  INFO    Checkpoint saved: 4643 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:15:50  INFO    Batch cost: $0.0517  |  Run total: $2.5076
+2026-05-21 14:15:53  INFO  Cast batch 48/270  (25 actors)
+2026-05-21 14:16:32  INFO    Checkpoint saved: 4668 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:16:32  INFO    Batch cost: $0.0593  |  Run total: $2.5669
+2026-05-21 14:16:35  INFO  Cast batch 49/270  (25 actors)
+2026-05-21 14:17:10  INFO    Checkpoint saved: 4693 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:17:10  INFO    Batch cost: $0.0514  |  Run total: $2.6184
+2026-05-21 14:17:13  INFO  Cast batch 50/270  (25 actors)
+2026-05-21 14:17:58  INFO    Checkpoint saved: 4718 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:17:58  INFO    Batch cost: $0.0537  |  Run total: $2.6720
+2026-05-21 14:18:01  INFO  Cast batch 51/270  (25 actors)
+2026-05-21 14:18:33  INFO    Checkpoint saved: 4743 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:18:33  INFO    Batch cost: $0.0500  |  Run total: $2.7221
+2026-05-21 14:18:36  INFO  Cast batch 52/270  (25 actors)
+2026-05-21 14:19:05  INFO    Checkpoint saved: 4768 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:19:05  INFO    Batch cost: $0.0479  |  Run total: $2.7700
+2026-05-21 14:19:08  INFO  Cast batch 53/270  (25 actors)
+2026-05-21 14:19:42  INFO    Checkpoint saved: 4793 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:19:42  INFO    Batch cost: $0.0496  |  Run total: $2.8196
+2026-05-21 14:19:45  INFO  Cast batch 54/270  (25 actors)
+2026-05-21 14:20:19  INFO    Checkpoint saved: 4818 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:20:19  INFO    Batch cost: $0.0509  |  Run total: $2.8705
+2026-05-21 14:20:22  INFO  Cast batch 55/270  (25 actors)
+2026-05-21 14:21:01  INFO    Checkpoint saved: 4843 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:21:01  INFO    Batch cost: $0.0544  |  Run total: $2.9249
+2026-05-21 14:21:04  INFO  Cast batch 56/270  (25 actors)
+2026-05-21 14:21:38  INFO    Checkpoint saved: 4868 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:21:38  INFO    Batch cost: $0.0535  |  Run total: $2.9784
+2026-05-21 14:21:41  INFO  Cast batch 57/270  (25 actors)
+2026-05-21 14:22:15  INFO    Checkpoint saved: 4893 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:22:15  INFO    Batch cost: $0.0516  |  Run total: $3.0300
+2026-05-21 14:22:18  INFO  Cast batch 58/270  (25 actors)
+2026-05-21 14:22:44  INFO    Checkpoint saved: 4918 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:22:44  INFO    Batch cost: $0.0450  |  Run total: $3.0750
+2026-05-21 14:22:47  INFO  Cast batch 59/270  (25 actors)
+2026-05-21 14:23:27  INFO    Checkpoint saved: 4943 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:23:27  INFO    Batch cost: $0.0553  |  Run total: $3.1303
+2026-05-21 14:23:30  INFO  Cast batch 60/270  (25 actors)
+2026-05-21 14:24:03  INFO    Checkpoint saved: 4968 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:24:03  INFO    Batch cost: $0.0495  |  Run total: $3.1798
+2026-05-21 14:24:06  INFO  Cast batch 61/270  (25 actors)
+2026-05-21 14:24:46  INFO    Checkpoint saved: 4993 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:24:46  INFO    Batch cost: $0.0560  |  Run total: $3.2357
+2026-05-21 14:24:49  INFO  Cast batch 62/270  (25 actors)
+2026-05-21 14:25:19  INFO    Checkpoint saved: 5018 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:25:19  INFO    Batch cost: $0.0464  |  Run total: $3.2821
+2026-05-21 14:25:22  INFO  Cast batch 63/270  (25 actors)
+2026-05-21 14:25:55  INFO    Checkpoint saved: 5043 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:25:55  INFO    Batch cost: $0.0454  |  Run total: $3.3275
+2026-05-21 14:25:58  INFO  Cast batch 64/270  (25 actors)
+2026-05-21 14:26:29  INFO    Checkpoint saved: 5068 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:26:29  INFO    Batch cost: $0.0501  |  Run total: $3.3776
+2026-05-21 14:26:32  INFO  Cast batch 65/270  (25 actors)
+2026-05-21 14:27:08  INFO    Checkpoint saved: 5093 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:27:08  INFO    Batch cost: $0.0555  |  Run total: $3.4331
+2026-05-21 14:27:11  INFO  Cast batch 66/270  (25 actors)
+2026-05-21 14:27:55  INFO    Checkpoint saved: 5118 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:27:55  INFO    Batch cost: $0.0554  |  Run total: $3.4884
+2026-05-21 14:27:58  INFO  Cast batch 67/270  (25 actors)
+2026-05-21 14:28:40  INFO    Checkpoint saved: 5143 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:28:40  INFO    Batch cost: $0.0524  |  Run total: $3.5409
+2026-05-21 14:28:43  INFO  Cast batch 68/270  (25 actors)
+2026-05-21 14:29:18  INFO    Checkpoint saved: 5168 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:29:18  INFO    Batch cost: $0.0512  |  Run total: $3.5921
+2026-05-21 14:29:21  INFO  Cast batch 69/270  (25 actors)
+2026-05-21 14:30:03  INFO    Checkpoint saved: 5193 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:30:03  INFO    Batch cost: $0.0620  |  Run total: $3.6541
+2026-05-21 14:30:06  INFO  Cast batch 70/270  (25 actors)
+2026-05-21 14:30:55  INFO    Checkpoint saved: 5218 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:30:55  INFO    Batch cost: $0.0587  |  Run total: $3.7127
+2026-05-21 14:30:58  INFO  Cast batch 71/270  (25 actors)
+2026-05-21 14:31:30  INFO    Checkpoint saved: 5243 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:31:30  INFO    Batch cost: $0.0447  |  Run total: $3.7574
+2026-05-21 14:31:33  INFO  Cast batch 72/270  (25 actors)
+2026-05-21 14:32:09  INFO    Checkpoint saved: 5268 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:32:09  INFO    Batch cost: $0.0527  |  Run total: $3.8101
+2026-05-21 14:32:12  INFO  Cast batch 73/270  (25 actors)
+2026-05-21 14:32:44  INFO    Checkpoint saved: 5293 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:32:44  INFO    Batch cost: $0.0469  |  Run total: $3.8570
+2026-05-21 14:32:47  INFO  Cast batch 74/270  (25 actors)
+2026-05-21 14:33:18  INFO    Checkpoint saved: 5318 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:33:18  INFO    Batch cost: $0.0480  |  Run total: $3.9050
+2026-05-21 14:33:21  INFO  Cast batch 75/270  (25 actors)
+2026-05-21 14:33:57  INFO    Checkpoint saved: 5343 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:33:57  INFO    Batch cost: $0.0494  |  Run total: $3.9545
+2026-05-21 14:34:00  INFO  Cast batch 76/270  (25 actors)
+2026-05-21 14:34:39  INFO    Checkpoint saved: 5368 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:34:39  INFO    Batch cost: $0.0540  |  Run total: $4.0085
+2026-05-21 14:34:42  INFO  Cast batch 77/270  (25 actors)
+2026-05-21 14:35:29  INFO    Checkpoint saved: 5393 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:35:29  INFO    Batch cost: $0.0562  |  Run total: $4.0647
+2026-05-21 14:35:32  INFO  Cast batch 78/270  (25 actors)
+2026-05-21 14:36:11  INFO    Checkpoint saved: 5418 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:36:11  INFO    Batch cost: $0.0529  |  Run total: $4.1176
+2026-05-21 14:36:14  INFO  Cast batch 79/270  (25 actors)
+2026-05-21 14:36:48  INFO    Checkpoint saved: 5443 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:36:48  INFO    Batch cost: $0.0495  |  Run total: $4.1671
+2026-05-21 14:36:51  INFO  Cast batch 80/270  (25 actors)
+2026-05-21 14:37:31  INFO    Checkpoint saved: 5468 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:37:31  INFO    Batch cost: $0.0532  |  Run total: $4.2204
+2026-05-21 14:37:34  INFO  Cast batch 81/270  (25 actors)
+2026-05-21 14:38:10  INFO    Checkpoint saved: 5493 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:38:10  INFO    Batch cost: $0.0514  |  Run total: $4.2718
+2026-05-21 14:38:13  INFO  Cast batch 82/270  (25 actors)
+2026-05-21 14:38:46  INFO    Checkpoint saved: 5518 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:38:46  INFO    Batch cost: $0.0483  |  Run total: $4.3201
+2026-05-21 14:38:49  INFO  Cast batch 83/270  (25 actors)
+2026-05-21 14:39:27  INFO    Checkpoint saved: 5543 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:39:27  INFO    Batch cost: $0.0530  |  Run total: $4.3731
+2026-05-21 14:39:30  INFO  Cast batch 84/270  (25 actors)
+2026-05-21 14:40:06  INFO    Checkpoint saved: 5568 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:40:06  INFO    Batch cost: $0.0538  |  Run total: $4.4269
+2026-05-21 14:40:09  INFO  Cast batch 85/270  (25 actors)
+2026-05-21 14:40:56  INFO    Checkpoint saved: 5593 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:40:56  INFO    Batch cost: $0.0632  |  Run total: $4.4902
+2026-05-21 14:40:59  INFO  Cast batch 86/270  (25 actors)
+2026-05-21 14:41:55  INFO    Checkpoint saved: 5618 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:41:55  INFO    Batch cost: $0.0529  |  Run total: $4.5430
+2026-05-21 14:41:58  INFO  Cast batch 87/270  (25 actors)
+2026-05-21 14:42:35  INFO    Checkpoint saved: 5643 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:42:35  INFO    Batch cost: $0.0551  |  Run total: $4.5981
+2026-05-21 14:42:38  INFO  Cast batch 88/270  (25 actors)
+2026-05-21 14:43:12  INFO    Checkpoint saved: 5668 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:43:12  INFO    Batch cost: $0.0515  |  Run total: $4.6496
+2026-05-21 14:43:15  INFO  Cast batch 89/270  (25 actors)
+2026-05-21 14:43:52  INFO    Checkpoint saved: 5693 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:43:52  INFO    Batch cost: $0.0519  |  Run total: $4.7015
+2026-05-21 14:43:55  INFO  Cast batch 90/270  (25 actors)
+2026-05-21 14:44:35  INFO    Checkpoint saved: 5718 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:44:35  INFO    Batch cost: $0.0528  |  Run total: $4.7543
+2026-05-21 14:44:38  INFO  Cast batch 91/270  (25 actors)
+2026-05-21 14:45:13  INFO    Checkpoint saved: 5743 actors → /Users/jonathanchapman/Documents/data/cast_meta/cast_progress.json
+2026-05-21 14:45:13  INFO    Batch cost: $0.0521  |  Run total: $4.8064
+2026-05-21 14:45:16  INFO  Cast batch 92/270  (25 actors)
+2026-05-21 14:45:16  INFO  Retrying request to /responses in 0.412091 seconds
+2026-05-21 14:45:16  INFO  Retrying request to /responses in 0.439696 seconds
+2026-05-21 14:45:17  INFO  Retrying request to /responses in 0.945642 seconds
+2026-05-21 14:45:17  INFO  Retrying request to /responses in 0.963543 seconds
+2026-05-21 14:45:19  INFO  Retrying request to /responses in 1.906997 seconds
+2026-05-21 14:45:19  INFO  Retrying request to /responses in 1.745405 seconds
+2026-05-21 14:45:21  INFO  Retrying request to /responses in 3.678519 seconds
+2026-05-21 14:45:21  INFO  Retrying request to /responses in 3.302341 seconds
+2026-05-21 14:45:25  INFO  Retrying request to /responses in 7.040349 seconds
+2026-05-21 14:45:26  INFO  Retrying request to /responses in 7.681071 seconds
+2026-05-21 14:45:33  INFO  Retrying request to /responses in 6.341075 seconds
+2026-05-21 14:45:34  INFO  Retrying request to /responses in 6.691111 seconds
+2026-05-21 14:45:40  INFO  Retrying request to /responses in 6.402620 seconds
+2026-05-21 14:45:41  INFO  Retrying request to /responses in 7.422598 seconds
+2026-05-21 14:45:47  INFO  Retrying request to /responses in 7.748328 seconds
+2026-05-21 14:45:49  INFO  Retrying request to /responses in 7.913254 seconds
+2026-05-21 14:45:56  INFO  Retrying request to /responses in 0.466511 seconds
+2026-05-21 14:45:57  INFO  Retrying request to /responses in 0.751325 seconds
+2026-05-21 14:45:58  INFO  Retrying request to /responses in 0.419392 seconds
+2026-05-21 14:45:58  INFO  Retrying request to /responses in 1.834913 seconds
+2026-05-21 14:46:00  INFO  Retrying request to /responses in 3.070070 seconds
+2026-05-21 14:46:00  INFO  Retrying request to /responses in 0.803504 seconds
+2026-05-21 14:46:02  INFO  Retrying request to /responses in 1.865734 seconds
+2026-05-21 14:46:04  INFO  Retrying request to /responses in 7.910260 seconds
+2026-05-21 14:46:06  INFO  Retrying request to /responses in 3.416233 seconds
+2026-05-21 14:46:12  INFO  Retrying request to /responses in 6.911062 seconds
+2026-05-21 14:46:12  INFO  Retrying request to /responses in 7.140101 seconds
+2026-05-21 14:46:19  INFO  Retrying request to /responses in 7.135017 seconds
+2026-05-21 14:46:20  INFO  Retrying request to /responses in 6.299532 seconds
+2026-05-21 14:46:27  INFO  Retrying request to /responses in 6.804663 seconds
+2026-05-21 14:46:27  INFO  Retrying request to /responses in 7.625084 seconds
+2026-05-21 14:46:34  INFO  Retrying request to /responses in 6.230467 seconds
+2026-05-21 14:46:36  INFO  Retrying request to /responses in 0.387500 seconds
+2026-05-21 14:46:37  INFO  Retrying request to /responses in 0.920740 seconds
+2026-05-21 14:46:39  INFO  Retrying request to /responses in 1.826998 seconds
+2026-05-21 14:46:41  INFO  Retrying request to /responses in 3.022571 seconds
+2026-05-21 14:46:42  INFO  Retrying request to /responses in 0.457972 seconds
+2026-05-21 14:46:43  INFO  Retrying request to /responses in 0.858191 seconds
+2026-05-21 14:46:44  INFO  Retrying request to /responses in 1.607518 seconds
+2026-05-21 14:46:45  INFO  Retrying request to /responses in 6.486995 seconds
+2026-05-21 14:46:46  INFO  Retrying request to /responses in 3.957219 seconds
+2026-05-21 14:46:51  INFO  Retrying request to /responses in 6.335290 seconds
+2026-05-21 14:46:52  INFO  Retrying request to /responses in 7.381031 seconds
+2026-05-21 14:46:58  INFO  Retrying request to /responses in 7.229618 seconds
+2026-05-21 14:46:59  INFO  Retrying request to /responses in 7.807843 seconds
+2026-05-21 14:47:06  INFO  Retrying request to /responses in 6.655124 seconds
+2026-05-21 14:47:08  INFO  Retrying request to /responses in 7.670452 seconds
+2026-05-21 14:47:13  INFO  Retrying request to /responses in 6.300847 seconds
+2026-05-21 14:47:16  INFO  Retrying request to /responses in 0.418839 seconds
+2026-05-21 14:47:17  INFO  Retrying request to /responses in 0.908111 seconds
+2026-05-21 14:47:19  INFO  Retrying request to /responses in 1.502108 seconds
+2026-05-21 14:47:20  INFO  Retrying request to /responses in 0.400581 seconds
+2026-05-21 14:47:21  INFO  Retrying request to /responses in 3.440728 seconds
+2026-05-21 14:47:21  INFO  Retrying request to /responses in 0.760545 seconds
+2026-05-21 14:47:22  INFO  Retrying request to /responses in 1.773920 seconds
+2026-05-21 14:47:25  INFO  Retrying request to /responses in 3.061330 seconds
+2026-05-21 14:47:25  INFO  Retrying request to /responses in 6.377793 seconds
+2026-05-21 14:47:28  INFO  Retrying request to /responses in 6.694825 seconds
+[32m2026-05-21 14:47:30 +1000[0m - dagster - [34mERROR[0m - [31m__ASSET_JOB - 77ef0c4a-c456-47b0-bef4-eead404405b7 - 91327 - cast - STEP_FAILURE - Execution of step "cast" failed.
+
+dagster._core.errors.DagsterExecutionInterruptedError
+
+Stack Trace:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_plan.py", line 243, in dagster_event_sequence_for_step
+    yield from check.generator(step_events)
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 505, in core_dagster_event_sequence_for_step
+    for user_event in _step_output_error_checked_user_event_sequence(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 184, in _step_output_error_checked_user_event_sequence
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/execute_step.py", line 88, in _process_asset_results_to_events
+    for user_event in user_event_sequence:
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 188, in execute_core_compute
+    for step_output in _yield_compute_results(step_context, inputs, compute_fn, compute_context):
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute.py", line 157, in _yield_compute_results
+    for event in iterate_with_context(
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/__init__.py", line 394, in iterate_with_context
+    next_output = next(iterator)
+                  ^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 135, in _coerce_op_compute_fn_to_iterator
+    result = invoke_compute_fn(
+             ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_core/execution/plan/compute_generator.py", line 115, in invoke_compute_fn
+    return fn(context, **args_to_pass) if context_arg_provided else fn(**args_to_pass)
+                                                                    ^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/dagster_defs.py", line 45, in cast
+    return refresh_cast(films_source)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/refresh.py", line 773, in refresh_cast
+    asyncio.run(_enrich_cast(new_actors))
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 641, in run_until_complete
+    self.run_forever()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 608, in run_forever
+    self._run_once()
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 1898, in _run_once
+    event_list = self._selector.select(timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/selectors.py", line 566, in select
+    kev_list = self._selector.control(None, max_ev, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jonathanchapman/Documents/git/film_synopsis_meta/.venv/lib/python3.11/site-packages/dagster/_utils/interrupts.py", line 81, in _new_signal_handler
+    raise error_cls()
+[0m

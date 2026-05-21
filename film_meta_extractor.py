@@ -35,6 +35,25 @@ from extraction import ExtractionTask
 #   gpt-5.4-nano does NOT support hosted web_search — never use here.
 DEFAULT_MODEL = os.environ.get("FILM_META_MODEL", "gpt-5.4-mini")
 
+# Hosted web_search has a separate per-call fee that does NOT appear in the
+# Responses API's usage.input_tokens / output_tokens block. Without counting
+# these explicitly the printed run cost dramatically under-reports the real
+# bill (~$25 per 1000 search calls at the time of writing — verify on
+# https://openai.com/api/pricing/). Override via env if your tier differs.
+WEB_SEARCH_COST_USD = float(os.environ.get("WEB_SEARCH_COST_USD", "0.025"))
+
+# Optional comma-separated allow-list, e.g. WEB_SEARCH_ALLOWED_DOMAINS="wikipedia.org,imdb.com".
+# When set, the web_search tool is constrained to those domains — reduces the
+# tokens-in from search results (model has less to chew on) but does NOT
+# reduce the per-call search fee. Trade-off: budget data for film_meta is
+# best sourced from Variety / Deadline / The Numbers / Box Office Mojo, so
+# narrowing to wiki+imdb will hurt budget coverage on lesser-known films.
+# Fine for cast/director (mostly bio data) where wiki+imdb cover ~all need.
+_DOMAINS_ENV = os.environ.get("WEB_SEARCH_ALLOWED_DOMAINS", "").strip()
+DEFAULT_WEB_SEARCH_DOMAINS: list[str] | None = (
+    [d.strip() for d in _DOMAINS_ENV.split(",") if d.strip()] if _DOMAINS_ENV else None
+)
+
 
 def _strip_json(text: str) -> str | None:
     m = re.search(r"\{.*\}", text, flags=re.DOTALL)
@@ -82,6 +101,8 @@ class ResponsesExtractor:
         cost_per_1m_input: float | None = None,
         cost_per_1m_output: float | None = None,
         use_web_search: bool = True,
+        web_search_domains: list[str] | None = DEFAULT_WEB_SEARCH_DOMAINS,
+        web_search_cost_usd: float = WEB_SEARCH_COST_USD,
     ):
         self.task   = task
         self.model  = model
@@ -91,8 +112,11 @@ class ResponsesExtractor:
         self._cost_in  = cost_per_1m_input
         self._cost_out = cost_per_1m_output
         self.use_web_search = use_web_search
+        self.web_search_domains = web_search_domains
+        self.web_search_cost_usd = web_search_cost_usd
         self.token_usage = {
-            "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
+            "prompt_tokens": 0, "completion_tokens": 0,
+            "search_calls": 0, "cost_usd": 0.0,
         }
 
     async def _call_api(self, user_msg: str) -> dict[str, Any]:
@@ -102,9 +126,18 @@ class ResponsesExtractor:
                 {"role": "system", "content": self.task.system_prompt},
                 {"role": "user",   "content": user_msg},
             ],
+            # Reasoning tokens count against the output budget on gpt-5.x models.
+            # Without a ceiling the default lets reasoning chew through the budget
+            # and the final JSON truncates mid-field. 4096 fits the largest film_meta
+            # JSON (~800 tok) plus headroom for reasoning at low effort.
+            "max_output_tokens": 4096,
+            "reasoning": {"effort": "low"},
         }
         if self.use_web_search:
-            kwargs["tools"] = [{"type": "web_search"}]
+            tool: dict[str, Any] = {"type": "web_search"}
+            if self.web_search_domains:
+                tool["filters"] = {"allowed_domains": list(self.web_search_domains)}
+            kwargs["tools"] = [tool]
         resp = await self.client.responses.create(**kwargs)
         raw = (resp.output_text or "").strip()
 
@@ -120,9 +153,26 @@ class ResponsesExtractor:
                     out_tok * self._cost_out / 1_000_000
                 )
 
+        # Hosted web_search fees are billed separately from model tokens. Count
+        # how many search calls this response made and add them to cost_usd so
+        # the printed run total reflects the actual bill, not just the tokens.
+        search_calls = sum(
+            1 for item in (getattr(resp, "output", None) or [])
+            if getattr(item, "type", "") == "web_search_call"
+        )
+        if search_calls:
+            self.token_usage["search_calls"] += search_calls
+            self.token_usage["cost_usd"] += search_calls * self.web_search_cost_usd
+
         data = _parse_response(raw)
         if not data:
-            return {"_error": "json_parse_failed", "_raw_output": raw[:1000]}
+            status = getattr(resp, "status", None)
+            incomplete = getattr(resp, "incomplete_details", None)
+            reason = getattr(incomplete, "reason", None) if incomplete else None
+            err = "json_parse_failed"
+            if status == "incomplete":
+                err = f"response_incomplete:{reason or 'unknown'}"
+            return {"_error": err, "_raw_output": raw[:1000]}
         return data
 
 

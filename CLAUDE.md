@@ -3,7 +3,7 @@
 LLM extraction of film metadata for the EVT box office model. **Raw extraction only** — encoding moved to `cinema_admits_models/build_data/` (2026-05-19).
 
 **Data root:** `~/Documents/data` (shared with `cinema_admits_models`)
-**Last updated:** 2026-05-20 (standalone repo + Dagster setup + TPM-tuned concurrency)
+**Last updated:** 2026-05-21 (Dagster source-of-truth aligned with `main.py` + `cinema_admits_models` vendored + batched film_meta checkpointing)
 
 ---
 
@@ -106,9 +106,12 @@ film_synopsis_meta/
 ├── prompts/*.yaml                # see Prompts table above
 ├── films/                        # Snowflake SQL queries (SQL_FILM_DETAILS in sql.py)
 ├── encode/                       # legacy helpers (EncHelper imported by depreciated synopsis encoder)
+├── vendored/cinema_admits_models/  # re_release_filter.py + encode_helper.py copied from sibling repo
+│                                  # — see vendored/cinema_admits_models/README.md for re-vendoring steps
 ├── diagnostics/                  # validation + A/B utilities — non-production
 │   ├── refresh_comparison.py     # sample run + side-by-side vs production
-│   ├── inspect_film_meta.py      # eyeball film_meta extraction results
+│   ├── inspect_film_meta.py      # eyeball film_meta extraction results (parquet)
+│   ├── inspect_film_meta_progress.py  # summarise the live progress + errors JSONs
 │   ├── print_compare.py          # console actor/director new-vs-old
 │   ├── compare_film_meta_search.py  # mini+search vs mini-no-search A/B
 │   ├── test_film_meta.py         # single-film smoke test
@@ -135,6 +138,14 @@ Check balance: https://platform.openai.com/settings/organization/billing/overvie
 ---
 
 ## Recent changes
+
+**2026-05-21 — Dagster source aligned with `main.py` + `cinema_admits_models` vendored + film_meta batched in `refresh.py`**
+- `refresh.py::load_films_from_snowflake` rewritten to mirror `main.py`'s loader: reads the train/test/prediction parquet snapshots under `~/Documents/data/raw_from_snowflake/` and `~/Documents/data/prediction_from_snowflake/` (the curated ~4–5k model-relevant work-set), drops rows without a usable synopsis, then joins **only** `film_title` from Snowflake. Function name kept for backwards-compat with `dagster_defs.py`, but Snowflake is no longer the primary source. Previously the loader read `SQL_FILM_DETAILS` directly, which produced a different (larger, less curated) set than `main.py` — Dagster and ad-hoc runs were drifting apart. Now they share one definition of "the films".
+- `refresh.py::load_full_film_catalogue` added — separate loader that pulls the **full** Snowflake `SQL_FILM_DETAILS` (not just the parquet work-set) so the re-release filter can match against older releases outside the snapshot window. Used by `refresh_film_meta` only. Mirrors `main.py`'s `_flu_full` query.
+- `refresh.py::_enrich_film_meta` rewritten to batch-process with per-batch checkpoint + error-JSON writes (mirrors `main.py::enrich_film_meta`). New constants: `META_BATCH_SIZE=25`, `META_BATCH_PAUSE_SECS=3`. New paths: `FILM_META_CHECKPOINT_PATH` (`film_meta_progress.json`), `FILM_META_ERRORS_PATH` (`film_meta_errors.json`). `_diff_film_meta` now reads both the checkpoint **and** the parquet, so a partially-completed Dagster run that crashed before the final parquet flush isn't re-extracted from scratch.
+- **Vendored `cinema_admits_models`** — `re_release_filter.py` + `encode_helper.py` copied into `vendored/cinema_admits_models/` with a README documenting the re-vendoring procedure. Both `main.py` and `refresh.py` switched from `sys.path.insert('/Users/.../cinema_admits_models')` to `from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter`. This unblocks Dagster running headless / on another machine where the sibling repo isn't checked out at that path. New `rapidfuzz` requirement (transitive — used by `re_release_filter`).
+- `ingest.py` import fix: `from synopses import sql` → `import sql`. The `synopses` subpackage no longer exists.
+- `diagnostics/inspect_film_meta_progress.py` added — reads the live `film_meta_progress.json` + `film_meta_errors.json` and prints coverage, per-error breakdowns, and per-film drill-downs. Use this between/after Dagster runs to see what's stuck on `_error: ambiguous` etc. without waiting for the final parquet flush.
 
 **2026-05-20 — standalone repo + Dagster setup + TPM-tuned concurrency**
 - Vendored `base_snowflake.py` into the repo root (formerly imported via absolute path from `/Users/.../evt_back_up/base`). Removed `sys.path.insert(...)` lines from 6 callers (`main.py`, `refresh.py`, `cast_main.py`, `tmdb_fetch.py`, two `diagnostics/*` scripts, deprecated encoder). Repo is now standalone.
@@ -168,4 +179,6 @@ Check balance: https://platform.openai.com/settings/organization/billing/overvie
 - **Director hit rate ~70%** is expected — regional/indie directors return `unknown` because they're not in training data. Web_search helps the worst cases but not all of them.
 - **Errored films get auto-retried** — `main.py` puts failures into `film_meta_errors.json`, NOT the checkpoint. The next run's diff sees them as not-done and retries. To force-retry a specific film, delete its entry from `film_meta_progress.json`.
 - **TPM bound, not RPM** — film_meta concurrency is gated by tokens-per-minute (200k org cap, ~15k per web_search call), not requests-per-minute. Don't bump `META_MAX_CONCURRENCY` past 2-3 without first raising the org's TPM tier.
-- **`refresh.py` column normalisation** — Snowflake returns `director_list` / `distributor_name` / `film_nat_open_date`; the loader renames these to `director` / `dstbtr` / `rel_at` to match the parquet schema used by `main.py`. Don't be surprised that `SQL_FILM_DETAILS` columns and `df_films` columns don't line up 1:1.
+- **`refresh.py` column normalisation** — `load_films_from_snowflake` now reads the parquet snapshots (which already use `director` / `dstbtr` / `rel_at`) and only joins `film_title` from Snowflake. The column-renaming dance (`director_list` → `director`, `distributor_name` → `dstbtr`, `film_nat_open_date` → `rel_at`) lives in `load_full_film_catalogue` instead — that loader hits raw `SQL_FILM_DETAILS` for the re-release filter, so its columns don't line up 1:1 with the work-set.
+- **`refresh.py` and `main.py` must agree on the work-set** — both now drive off the same parquet snapshots. If `main.py`'s loader changes, `refresh.py::load_films_from_snowflake` has to track it, or Dagster runs will silently process a different set of films than ad-hoc runs.
+- **`vendored/cinema_admits_models/` is read-only** — these files are copies, not the source. Edit upstream in `/Users/jonathanchapman/Documents/git/cinema_admits_models/` and re-vendor (procedure in `vendored/cinema_admits_models/README.md`). The one in-repo modification is the `from .encode_helper import EncHelper` relative-import patch — re-apply it after re-vendoring.

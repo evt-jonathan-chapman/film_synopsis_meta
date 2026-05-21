@@ -26,3 +26,6 @@ cryptography
 
 # HTTP
 requests
+
+# Used by vendored/cinema_admits_models/re_release_filter.py
+rapidfuzz
