@@ -65,9 +65,9 @@ FILM_IDS = None
 SAMPLE_SIZE   = 0          # 0 = all; N = first N films by release date
 
 RUN_SYNOPSIS  = False       # extract synopsis features via LLM
-RUN_CAST      = False      # enrich cast profiles via LLM
-RUN_DIRECTOR  = False      # enrich director profiles via LLM
-RUN_META      = True      # web-grounded film_meta extraction (studios/cast/genres/budget/trailers)
+RUN_CAST      = True      # enrich cast profiles via LLM
+RUN_DIRECTOR  = True      # enrich director profiles via LLM
+RUN_META      = False      # web-grounded film_meta extraction (studios/cast/genres/budget/trailers)
 RUN_ENCODE    = False    # DEPRECATED 2026-05-19 — encoding moved to cinema_admits_models/build_data/encode_llm_features.py. The encode_*.py scripts have been moved to depreciated/encoding/. Leave False; flip True only for legacy reruns.
 
 MAX_CONCURRENCY = 2   # 8 concurrent × 11 tasks = ~88 requests/burst — stays under org TPM limit
