@@ -1,7 +1,16 @@
+import sys
 from pathlib import Path
 import yaml
 
-_CFG_PATH = Path(__file__).parent / 'config.yaml'
+# Repo root, resolved from this module's own location — works whether imported
+# from a script or pasted into a console (mirrors cinema_admits_models/paths.py).
+# Prepend to sys.path so root-level modules (base_snowflake, comscore_matcher, …)
+# import regardless of the caller's cwd.
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+_CFG_PATH = REPO_ROOT / 'config.yaml'
 with open(_CFG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
@@ -17,6 +26,8 @@ SF_RSA_KEY   = _cfg['snowflake']['rsa_key']
 # ── SQL ────────────────────────────────────────────────────────────────────────
 SQL_PATH     = Path(_cfg['paths']['sql_path'])
 THREE_D_SQL  = _cfg['paths']['three_d_sql']
+SQL_DIR           = REPO_ROOT / 'sql'
+COMSCORE_SQL_PATH = SQL_DIR / 'comscore_extract.sql'
 
 # ── Data paths (all under main_dir) ───────────────────────────────────────────
 _synopsis_dir = _cfg['paths']['synopsis_dir']

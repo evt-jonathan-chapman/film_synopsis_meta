@@ -1,24 +1,41 @@
 # CLAUDE.md
 
-LLM extraction of film metadata for the EVT box office model. **Raw extraction only** — encoding moved to `cinema_admits_models/build_data/` (2026-05-19).
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+LLM extraction of film metadata for the EVT box office model. **Raw extraction only** — encoding lives in the sibling repo `cinema_admits_models/build_data/`.
 
 **Data root:** `~/Documents/data` (shared with `cinema_admits_models`)
-**Last updated:** 2026-05-21 (Dagster source-of-truth aligned with `main.py` + `cinema_admits_models` vendored + batched film_meta checkpointing)
+
+See `DAGSTER.md` for Dagster-specific operational details.
 
 ---
 
-## Four extraction paths
+## Five extraction paths
 
 | Path | Model | Cardinality | Output parquet |
 |---|---|---|---|
-| **Synopsis** (LiteLLM batch) | `gpt-5.4-nano` | per film | `synopsis_v2/synopses_extracted.parquet` |
+| **Synopsis** (LiteLLM batch) | `gpt-4.1-nano` (default) | per film | `synopsis_v2/synopses_extracted.parquet` |
 | **Film meta** (Responses + `web_search`) | `gpt-5.4-mini` | per film | `film_meta/film_meta_enriched.parquet` |
 | **Actor** (Responses + `web_search`) | `gpt-5.4-mini` | per unique actor | `cast_meta/cast_enriched.parquet` |
 | **Director** (Responses + `web_search`) | `gpt-5.4-mini` | per unique director | `director_meta/director_enriched.parquet` |
+| **Comscore match** (rapidfuzz, no API) | — | per film | `comscore/comscore_cache.parquet` |
 
-Nano = pure text classification (9 tasks read only title + synopsis). Mini + web_search = knowledge-grounded fields (budget, studios, fame_tier, director_tier, ip_strength, adaptation_type) where training memory is too brittle, especially on recent or upcoming films.
+Synopsis uses `DEFAULT_MODEL` from `models.py` (currently `gpt-4.1-nano`, with `gpt-5.4-mini` as fallback). Nano = pure text classification (9 tasks read only title + synopsis). Mini + web_search = knowledge-grounded fields (budget, studios, fame_tier, director_tier, ip_strength, adaptation_type) where training memory is too brittle, especially on recent or upcoming films.
 
-All extractors are checkpoint-resumable — progress JSONs in `~/Documents/data/<dir>/*_progress.json`. Delete to force re-extraction.
+All LLM extractors are checkpoint-resumable — progress JSONs in `~/Documents/data/<dir>/*_progress.json`. Delete to force re-extraction.
+
+### Comscore matching (fifth path — no LLM, no API)
+
+`comscore_matcher.py::ComscoreMatcher` maps EVT `film_id` → Comscore `title_global_id` so IBOE_TITLES + IBOE_FLASH_GROSS can join onto EVT films. Driver: `rematch_comscore.py`. Comscore data is pulled once via `sql/comscore_extract.sql`.
+
+Matching: NFKD-normalised titles scored with `max(ratio, token_sort_ratio)` across five Comscore title columns (`film_name`/`upper_name`/`title_aka`/`us_title_name`/`short_name`), variant/festival prefix stripping (`GC`/`3D`/`IMAX`/`TFF -`…), a length-ratio guard (rejects short-title impostors like AVATAR→TÁR), a ±1-year release window, and a date-proximity tie-breaker. Each film lands in a confidence tier: **high** (≥0.92 and ≤365 days off), **borderline**, **unmatched**, or **manual**.
+
+Outputs under `~/Documents/data/comscore/`:
+- `comscore_cache.parquet` — keyed on EVT `film_id` (this is the checkpoint — no separate progress JSON)
+- `comscore_review_needed.parquet` — borderline+unmatched rows with top-5 candidates, for human triage
+- `comscore_manual_overrides.parquet` — **user-authored**: fill `manual_override_cs_id` in the review file, save under this name, and overrides win on the next run (forced to `confidence=manual`, `score=1.0`)
+
+`ComscoreMatcher.re_score()` re-evaluates the whole cache against an updated extract/algorithm without re-pulling (manual overrides preserved). Concert films are dropped on both sides (`is_alt_content` in Comscore; `adaptation_type == "concert_film"` from `film_meta_enriched.parquet` on the EVT side).
 
 ---
 
@@ -32,12 +49,19 @@ uv pip install -r requirements.txt
 # Ad-hoc / interactive
 python main.py                    # edit CONFIG block (RUN_SYNOPSIS / RUN_CAST / RUN_DIRECTOR / RUN_META)
 
-# Diff-based CLI (the four refresh paths)
+# Diff-based CLI (the four LLM paths)
 python refresh.py                              # all four paths
-python refresh.py --only synopsis cast         # subset
-python refresh.py --force-film-meta            # ignore diff for one path
+python refresh.py --only synopsis cast         # subset (choices: synopsis cast director film_meta)
+python refresh.py --force-synopsis             # ignore diff for synopsis
+python refresh.py --force-cast
+python refresh.py --force-director
+python refresh.py --force-film-meta
+
+# Comscore matching (CPU only, no API)
+python rematch_comscore.py                     # set LIMIT_FILMS at top of file (default None = full run)
 
 # Dagster (local)
+export DAGSTER_HOME=~/dagster_home && mkdir -p "$DAGSTER_HOME"
 dagster dev -f dagster_defs.py                 # UI at http://localhost:3000
 
 # Diagnostics / validation (in diagnostics/ subfolder):
@@ -45,14 +69,34 @@ python diagnostics/test_film_meta.py            # single-film smoke test
 python diagnostics/compare_film_meta_search.py  # A/B mini+search vs mini-no-search
 python diagnostics/refresh_comparison.py        # full sample run vs production parquets
 python diagnostics/inspect_film_meta.py [--detail|--vs-tmdb|--film-id N]
+python diagnostics/inspect_film_meta_progress.py  # live coverage + error breakdown mid-run
 python diagnostics/print_compare.py [--disagree-only]
+python diagnostics/inspect_comscore_unmatched.py  # bucketise unmatched/borderline by candidate_1_score
 ```
 
-Required env (`.env`): `OPENAI_KEY=...`. Optional: `FILM_META_MODEL=gpt-5.4-mini` (default).
+Required env (`.env`): `OPENAI_KEY=...`
+
+Optional env:
+| Variable | Default | Notes |
+|---|---|---|
+| `FILM_META_MODEL` | `gpt-5.4-mini` | Override model for all Responses extractors |
+| `WEB_SEARCH_COST_USD` | `0.025` | Per-call web_search fee — verify against current OpenAI pricing; this default may be stale |
+| `WEB_SEARCH_ALLOWED_DOMAINS` | (none) | Comma-separated allowlist; narrowing to wiki+imdb hurts budget coverage |
+| `DAGSTER_HOME` | tmp dir | Set persistently in shell profile; without it Dagster forgets prior runs between sessions |
 
 ### Dagster assets
 
-`dagster_defs.py` exposes one upstream `films_source` asset (single Snowflake pull) and four downstream extraction assets — `synopsis`, `cast`, `directors`, `film_meta` — each callable independently. Jobs: `nightly_job` (synopsis+cast+directors, 02:00 daily), `film_meta_job` (film_meta only, 03:00 Sundays — separated because it's the $100+/run path), `full_refresh_job` (all five, ad-hoc).
+`dagster_defs.py` exposes one upstream `films_source` asset (single Snowflake pull) and five downstream assets — `synopsis`, `cast`, `directors`, `film_meta`, `comscore_match` — each callable independently.
+
+Jobs:
+- `nightly_job` — synopsis + cast + directors, scheduled 02:00 daily
+- `film_meta_job` — film_meta only, scheduled 03:00 Sundays (separated because it's the $100+/run path)
+- `comscore_job` — comscore_match only, ad-hoc
+- `full_refresh_job` — everything, ad-hoc
+
+`comscore_match` does **not** consume `films_source` — it loads EVT films from parquet snapshots itself, plus reads `film_meta_enriched.parquet` for the concert-film filter. It declares `deps=[film_meta]` so a fresh film_meta run marks it stale.
+
+Schedules are **off by default** — toggle on in the UI. `dagster dev` runs both the webserver and the daemon; for headless, run `dagster-daemon run` separately (with `DAGSTER_HOME` set).
 
 ---
 
@@ -88,39 +132,15 @@ Concurrency: nano at 8 (`MAX_CONCURRENCY`), **mini+search at 2** (`META_MAX_CONC
 
 ---
 
-## Repo map
+## Key modules
 
-```
-film_synopsis_meta/
-├── main.py                       # ad-hoc / interactive runner
-├── refresh.py                    # diff-based CLI + 4 public refresh_* functions for Dagster
-├── dagster_defs.py               # films_source + 4 extraction assets + jobs/schedules
-├── requirements.txt              # standalone-repo dependencies (incl. dagster)
-├── base_snowflake.py             # vendored SnowFlakeBase (formerly evt_back_up/base)
-├── extractor.py                  # LlmJsonExtractor (LiteLLM, nano)
-├── film_meta_extractor.py        # ResponsesExtractor + 3 subclasses (mini+search)
-├── extraction.py                 # ExtractionTask dataclass + JSON parse helpers
-├── models.py                     # MODELS dict + default + pricing
-├── load_prompts.py
-├── config.py / config.yaml       # paths, Snowflake creds
-├── prompts/*.yaml                # see Prompts table above
-├── films/                        # Snowflake SQL queries (SQL_FILM_DETAILS in sql.py)
-├── encode/                       # legacy helpers (EncHelper imported by depreciated synopsis encoder)
-├── vendored/cinema_admits_models/  # re_release_filter.py + encode_helper.py copied from sibling repo
-│                                  # — see vendored/cinema_admits_models/README.md for re-vendoring steps
-├── diagnostics/                  # validation + A/B utilities — non-production
-│   ├── refresh_comparison.py     # sample run + side-by-side vs production
-│   ├── inspect_film_meta.py      # eyeball film_meta extraction results (parquet)
-│   ├── inspect_film_meta_progress.py  # summarise the live progress + errors JSONs
-│   ├── print_compare.py          # console actor/director new-vs-old
-│   ├── compare_film_meta_search.py  # mini+search vs mini-no-search A/B
-│   ├── test_film_meta.py         # single-film smoke test
-│   └── (compare_models, compare_prompt_versions, analyse_title_patterns, gpu_test, migration — legacy)
-└── depreciated/encoding/
-    └── encode_synopsis.py        # superseded by cinema_admits_models/build_data/encode_llm_features.py
-```
-
-`cast_encode.py` + `director_encode.py` moved to `cinema_admits_models/build_data/encode_cast_features.py` + `encode_director_features.py` on 2026-05-19. Don't recreate them here.
+- **`config.py`** — single source of truth for all paths and constants. Reads `config.yaml` (Snowflake creds, data root). Import paths from here; never hardcode `~/Documents/data`.
+- **`models.py`** — model registry for LiteLLM paths. `DEFAULT_MODEL` is the synopsis nano model; `DEFAULT_FALLBACKS` is the fallback chain. To switch the synopsis model, change `DEFAULT_MODEL` here.
+- **`refresh.py`** — diff-based orchestrator for all four LLM paths. The Dagster assets are thin wrappers around the four `refresh_*` functions here. `load_films_from_snowflake` is the canonical work-set loader (primary source is parquet snapshots, Snowflake join is for titles only).
+- **`films/sql.py`** — Snowflake SQL queries. `SQL_FILM_DETAILS` is the main join used by `load_films_from_snowflake` to fetch authoritative titles from `EDW_ENT_PRD.CURATED.DIM_VH_FILM`.
+- **`cast_main.py`** — legacy standalone cast enrichment script using `LlmJsonExtractor` (LiteLLM, no web_search). Predates `refresh.py`. Use `refresh.py` or Dagster instead; this file is kept for reference only.
+- **`ingest.py`** — `sync_synopses_sources` writes extracted synopses back to Snowflake after a synopsis run (called by `refresh_synopsis`, non-fatal if it fails).
+- **`title_cleaner.py`** — strips variant prefixes (`3D`, `IMAX`, `GC`) from titles before LLM prompt construction. Used by both `LlmJsonExtractor` and `FilmMetaExtractor`.
 
 ---
 
@@ -132,41 +152,9 @@ film_synopsis_meta/
 | Film meta mini+search | ~3 hrs | ~$100-150 |
 | Actor mini+search (new only) | minutes | <$10 |
 | Director mini+search (new only) | seconds | <$1 |
+| Comscore match | ~30-60 min cold-start | $0 |
 
-Check balance: https://platform.openai.com/settings/organization/billing/overview
-
----
-
-## Recent changes
-
-**2026-05-21 — Dagster source aligned with `main.py` + `cinema_admits_models` vendored + film_meta batched in `refresh.py`**
-- `refresh.py::load_films_from_snowflake` rewritten to mirror `main.py`'s loader: reads the train/test/prediction parquet snapshots under `~/Documents/data/raw_from_snowflake/` and `~/Documents/data/prediction_from_snowflake/` (the curated ~4–5k model-relevant work-set), drops rows without a usable synopsis, then joins **only** `film_title` from Snowflake. Function name kept for backwards-compat with `dagster_defs.py`, but Snowflake is no longer the primary source. Previously the loader read `SQL_FILM_DETAILS` directly, which produced a different (larger, less curated) set than `main.py` — Dagster and ad-hoc runs were drifting apart. Now they share one definition of "the films".
-- `refresh.py::load_full_film_catalogue` added — separate loader that pulls the **full** Snowflake `SQL_FILM_DETAILS` (not just the parquet work-set) so the re-release filter can match against older releases outside the snapshot window. Used by `refresh_film_meta` only. Mirrors `main.py`'s `_flu_full` query.
-- `refresh.py::_enrich_film_meta` rewritten to batch-process with per-batch checkpoint + error-JSON writes (mirrors `main.py::enrich_film_meta`). New constants: `META_BATCH_SIZE=25`, `META_BATCH_PAUSE_SECS=3`. New paths: `FILM_META_CHECKPOINT_PATH` (`film_meta_progress.json`), `FILM_META_ERRORS_PATH` (`film_meta_errors.json`). `_diff_film_meta` now reads both the checkpoint **and** the parquet, so a partially-completed Dagster run that crashed before the final parquet flush isn't re-extracted from scratch.
-- **Vendored `cinema_admits_models`** — `re_release_filter.py` + `encode_helper.py` copied into `vendored/cinema_admits_models/` with a README documenting the re-vendoring procedure. Both `main.py` and `refresh.py` switched from `sys.path.insert('/Users/.../cinema_admits_models')` to `from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter`. This unblocks Dagster running headless / on another machine where the sibling repo isn't checked out at that path. New `rapidfuzz` requirement (transitive — used by `re_release_filter`).
-- `ingest.py` import fix: `from synopses import sql` → `import sql`. The `synopses` subpackage no longer exists.
-- `diagnostics/inspect_film_meta_progress.py` added — reads the live `film_meta_progress.json` + `film_meta_errors.json` and prints coverage, per-error breakdowns, and per-film drill-downs. Use this between/after Dagster runs to see what's stuck on `_error: ambiguous` etc. without waiting for the final parquet flush.
-
-**2026-05-20 — standalone repo + Dagster setup + TPM-tuned concurrency**
-- Vendored `base_snowflake.py` into the repo root (formerly imported via absolute path from `/Users/.../evt_back_up/base`). Removed `sys.path.insert(...)` lines from 6 callers (`main.py`, `refresh.py`, `cast_main.py`, `tmdb_fetch.py`, two `diagnostics/*` scripts, deprecated encoder). Repo is now standalone.
-- `refresh.py` rewritten: was synopsis+cast only, now covers all four paths as separate `refresh_synopsis/cast/directors/film_meta` functions. Each takes optional pre-loaded `df_films` so Dagster shares one Snowflake pull. Snowflake loader fixed (was reading a non-existent SQL file).
-- `dagster_defs.py` added with `films_source` upstream asset + 4 extraction assets. Three jobs: `nightly_job` (cheap paths), `film_meta_job` (weekly), `full_refresh_job`. Run via `dagster dev -f dagster_defs.py`.
-- `requirements.txt` added (dagster, pandas, openai, litellm, snowflake-sqlalchemy, ...).
-- **Rate-limit fix:** `META_MAX_CONCURRENCY` lowered from 4 → 2 and `AsyncOpenAI(max_retries=8)` set in `film_meta_extractor.py`. Symptom diagnosed: org TPM cap is 200k/min, web_search calls ≈15k tokens each → sustainable ~13 req/min. At concurrency=4 the rolling window saturates within 30s and ~70% of subsequent calls 429. At concurrency=2 with retries, error rate drops to ~4% (genuine `json_parse_failed`, not rate limits).
-- `main.py` now writes errored film_meta entries to a side log `~/Documents/data/film_meta/film_meta_errors.json` instead of dropping silently. Checkpoint and error log are guaranteed disjoint, so failed films get automatically retried on the next run.
-
-**2026-05-19 (later) — film_meta disambiguation inputs changed**
-- `FilmMetaExtractor` now sends **title + release date + director + first sentence of EVT synopsis** to the LLM. AU distributor is no longer sent (it stays in `df_source` for the skip-filter and `evt_dstbtr` passthrough on save, but is hidden from the model).
-- Motivation: two films can share title + year. Director and synopsis-opening are strong disambiguation anchors; distributor was weak.
-- Prompt (`prompts/film_meta_prompts.yaml`) gained a **Disambiguation** section instructing the model to verify candidates against the EVT director + synopsis and to return `{"_error": "ambiguous", "_candidates": [...]}` instead of guessing when two films still match. Worth grepping checkpoints for `_error: "ambiguous"` after runs.
-- `arun()` signature: `dstbtr_col` removed; `director_col='director'` and `synopsis_col='synopsis'` added. Both columns are already in `df_films` from the raw parquets — no new joins needed.
-
-**2026-05-19 — encoding moved out + cast/director upgraded to web_search**
-- Three encoders moved/deprecated: `encode_synopsis.py` → `depreciated/encoding/` (functionality in `cinema_admits_models/build_data/encode_llm_features.py`); `cast_encode.py` and `director_encode.py` moved to `cinema_admits_models/build_data/` as `encode_cast_features.py` and `encode_director_features.py`.
-- `ip_strength` + `adaptation_type` migrated from synopsis nano batch into film_meta mini+search call (web grounding is more reliable on recent IP).
-- Cast + director extractors switched from nano (LiteLLM) to mini + web_search (Responses API).
-- Default model bumped from `gpt-4o-mini` (deprecating) to `gpt-5.4-mini`.
-- `main.py::RUN_ENCODE` now raises with a pointer to the new locations. `refresh.py` no longer calls encoders.
+The printed "Run total: $X" for web_search paths uses `WEB_SEARCH_COST_USD` which may be stale — verify against the actual dashboard bill.
 
 ---
 
@@ -174,11 +162,29 @@ Check balance: https://platform.openai.com/settings/organization/billing/overvie
 
 - **Re-run dedup keeps `first`** — existing parquet rows win. Delete checkpoint + parquet to fully re-extract.
 - **Actor names normalised to uppercase** before matching against `cast_enriched.parquet`. Directors kept as-is.
-- **`|AND ` prefix in actor_list** — Snowflake artifact, stripped by `_clean_actor` in `main.py` and the moved cast encoder.
+- **`|AND ` prefix in actor_list** — Snowflake artifact, stripped by `_clean_actor` in `main.py`.
 - **LLM field clamping happens at encode time** in `cinema_admits_models`, not here. Raw checkpoint JSONs retain original LLM output (including malformed values).
 - **Director hit rate ~70%** is expected — regional/indie directors return `unknown` because they're not in training data. Web_search helps the worst cases but not all of them.
 - **Errored films get auto-retried** — `main.py` puts failures into `film_meta_errors.json`, NOT the checkpoint. The next run's diff sees them as not-done and retries. To force-retry a specific film, delete its entry from `film_meta_progress.json`.
-- **TPM bound, not RPM** — film_meta concurrency is gated by tokens-per-minute (200k org cap, ~15k per web_search call), not requests-per-minute. Don't bump `META_MAX_CONCURRENCY` past 2-3 without first raising the org's TPM tier.
-- **`refresh.py` column normalisation** — `load_films_from_snowflake` now reads the parquet snapshots (which already use `director` / `dstbtr` / `rel_at`) and only joins `film_title` from Snowflake. The column-renaming dance (`director_list` → `director`, `distributor_name` → `dstbtr`, `film_nat_open_date` → `rel_at`) lives in `load_full_film_catalogue` instead — that loader hits raw `SQL_FILM_DETAILS` for the re-release filter, so its columns don't line up 1:1 with the work-set.
-- **`refresh.py` and `main.py` must agree on the work-set** — both now drive off the same parquet snapshots. If `main.py`'s loader changes, `refresh.py::load_films_from_snowflake` has to track it, or Dagster runs will silently process a different set of films than ad-hoc runs.
-- **`vendored/cinema_admits_models/` is read-only** — these files are copies, not the source. Edit upstream in `/Users/jonathanchapman/Documents/git/cinema_admits_models/` and re-vendor (procedure in `vendored/cinema_admits_models/README.md`). The one in-repo modification is the `from .encode_helper import EncHelper` relative-import patch — re-apply it after re-vendoring.
+- **TPM bound, not RPM** — film_meta concurrency is gated by tokens-per-minute (200k org cap, ~15k per web_search call). Don't bump `META_MAX_CONCURRENCY` past 2-3 without first raising the org's TPM tier.
+- **`refresh.py` and `main.py` must agree on the work-set** — both drive off the same parquet snapshots. If `main.py`'s loader changes, `refresh.py::load_films_from_snowflake` has to track it, or Dagster runs will silently process a different film set than ad-hoc runs.
+- **`vendored/cinema_admits_models/` is read-only** — these files are copies, not the source. Edit upstream in `cinema_admits_models/` and re-vendor (procedure in `vendored/cinema_admits_models/README.md`). The one in-repo modification — `from .encode_helper import EncHelper` relative-import patch — must be re-applied after re-vendoring.
+- **Comscore cache is the checkpoint** — already-matched films (score ≥ `match_thresh`, default 0.80) are skipped on re-run; below-threshold films are retried. To force a full re-match, delete **both** `comscore_cache.parquet` and `comscore_review_needed.parquet`, or call `re_score()` instead of `build_mapping()`.
+- **Comscore manual overrides win and are never touched by `re_score()`** — they're applied first and forced to `confidence=manual`, `score=1.0`. The matcher writes the *review* file; the *overrides* file is created by a human.
+- **`match_thresh` (0.80) vs `HIGH_CONFIDENCE_SCORE` (0.92) are different gates** — anything ≥0.80 is a match (cached, not retried); only ≥0.92 within 365 days is labelled `high`. The 0.80–0.92 band is `borderline` and lands in the review file.
+- **Comscore SQL is windowed** — `sql/comscore_extract.sql` is AU-only and filtered to specific release-date windows (see `params` CTE). Films outside that window won't match because they're absent from the extract, not because the matcher failed.
+- **`rematch_comscore.py` needs `film_lookup.parquet`** — at `DATA_DIR/look_ups/film_lookup.parquet`. The comscore driver joins this for the `film` title column. If it's missing the load will raise `FileNotFoundError`.
+- **`cast_encode.py` / `director_encode.py` do not exist here** — they moved to `cinema_admits_models/build_data/`. Don't recreate them.
+- **`main.py::RUN_ENCODE` raises** with a pointer to the new encode locations — encoding is no longer done in this repo.
+
+---
+
+## Troubleshooting
+
+- **`RuntimeError: Snowflake unavailable`** — check `config.yaml` creds and that VPN is connected.
+- **Cascading 429s on `film_meta`** — concurrency is already tuned to 2 for the 200k TPM cap. Don't raise `META_MAX_CONCURRENCY` without first raising the org's TPM tier.
+- **Dagster forgets prior runs between sessions** — `DAGSTER_HOME` not set, so it used a tmp dir. Set `export DAGSTER_HOME=~/dagster_home` permanently in your shell profile.
+- **Schedule didn't fire overnight** — daemon wasn't running. `dagster dev` must stay up, or run `dagster-daemon run` separately.
+- **`comscore_match` asset fails with `FileNotFoundError`** — `film_meta_enriched.parquet` doesn't exist yet; materialise `film_meta` first.
+- **Single asset materialisation fails** — if running a downstream asset alone (e.g. `cast`), `films_source` must already be materialised in the current `DAGSTER_HOME`. Materialise it once first, or select both together.
+- **`_error: "ambiguous"` in film_meta** — run `python diagnostics/inspect_film_meta_progress.py` to see which films are stuck and why. These stay in `film_meta_errors.json` and auto-retry on the next run.
