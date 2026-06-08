@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import glob
 import pandas as pd
 from comscore_matcher import ComscoreMatcher
 from config import DATA_DIR, RAW_PARQUET_GLOBS_ALL, FILM_META_ENRICHED_PATH
@@ -18,7 +17,7 @@ from config import DATA_DIR, RAW_PARQUET_GLOBS_ALL, FILM_META_ENRICHED_PATH
 
 from rematch_comscore import pull_comscore
 
-cs = pull_comscore()
+# cs = pull_comscore()
 
 OUT_PATH = "/Users/jonathanchapman/Documents/data/comscore/output"
 
@@ -34,28 +33,26 @@ BUCKETS = [
 # cs.groupby("match_confidence").agg({"film_id": "nunique"})
 
 # 1. Sum admits per film across all parquets
-parts = []
-for pattern in RAW_PARQUET_GLOBS_ALL:
-    for p in sorted(glob.glob(pattern)):
-        parts.append(pd.read_parquet(p, columns=['film_id', 'film', 'week_admits']))
-
-admits = (
-    pd.concat(parts, ignore_index=True)
-    .groupby('film_id', as_index=False)
-    .agg(total_admits=('week_admits', 'sum'))
-)
+# parts = []
+# for pattern in RAW_PARQUET_GLOBS_ALL:
+#     for p in sorted(glob.glob(pattern)):
+#         parts.append(pd.read_parquet(p, columns=['film_id', 'week_admits']))
 
 fim_lookup = pd.read_parquet("/Users/jonathanchapman/Documents/data/look_ups/film_lookup.parquet")
+
+adaptation = pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id', 'adaptation_type'])
+
+admits = fim_lookup[["film_id", "rel_at", "week1_admits"]]
+
 # 2. Load comscore cache
 cache = (
     pd.read_parquet(DATA_DIR / 'comscore' / 'comscore_cache.parquet')
     .merge(fim_lookup[["film_id", "rel_at"]], how="left", on="film_id")
+    .merge(adaptation, on='film_id', how='left')
 )
 
-cache.groupby("match_confidence").agg({"film_id": "nunique"})
-
 # 3. Load adaptation_type from film_meta
-adaptation = pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id', 'adaptation_type'])
+
 
 # 4. Join admits + adaptation_type onto cache
 joined = cache.merge(admits, on='film_id', how='left').merge(adaptation, on='film_id', how='left')
@@ -74,6 +71,8 @@ print(f"Unmatched with <100 admits:  {(unmatched['total_admits'] < 100).sum()}")
 print(f"\nUnmatched by adaptation_type:")
 print(unmatched.groupby('adaptation_type', dropna=False)['total_admits'].agg(['count', 'sum']).sort_values('sum', ascending=False).to_string())
 
+
+cache.groupby("match_confidence").agg({"film_id": "nunique"})
 
 match_cat = ["borderline", "high", "unmatched"]
 

@@ -54,5 +54,5 @@ PROC_PARQUET_GLOB      = str(_data / 'raw_from_snowflake' / '*' / 'train' / 'tra
 PROC_PARQUET_GLOB_TEST = str(_data / 'raw_from_snowflake' / '*' / 'test'  / 'test_proc_ds.parquet')
 
 # All globs combined — use this as the default for encode functions so test/pred films are included
-RAW_PARQUET_GLOBS_ALL  = [RAW_PARQUET_GLOB, RAW_PARQUET_GLOB_TEST, RAW_PARQUET_GLOB_PRED]
+RAW_PARQUET_GLOBS_ALL  = [RAW_PARQUET_GLOB, RAW_PARQUET_GLOB_TEST]
 PROC_PARQUET_GLOBS_ALL = [PROC_PARQUET_GLOB, PROC_PARQUET_GLOB_TEST]

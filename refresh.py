@@ -160,26 +160,19 @@ def load_films_from_snowflake() -> pd.DataFrame | None:
 
 
 def load_full_film_catalogue() -> pd.DataFrame | None:
-    """Full Snowflake film_details — used by the re-release filter so older
-    releases (outside our model-relevant snapshot window) can still be matched
-    against current films. Mirrors main.py's `_flu_full` query."""
+    """Full film catalogue for the re-release filter — reads film_lookup.parquet
+    (same source as rematch_comscore.py::load_evt_films) so no Snowflake connection
+    is required."""
+    path = DATA_DIR / "look_ups" / "film_lookup.parquet"
     try:
-        from base_snowflake import SnowFlakeBase
-        sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
-        sb.create_snowflake_connection(SF_RSA_KEY)
-        full = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)
-        full = full.rename(columns={
-            'director_list':      'director',
-            'distributor_name':   'dstbtr',
-            'film_nat_open_date': 'rel_at',
-            'film_title':         'film',
-        })
-        full['film_id'] = full['film_id'].astype(int)
-        full['rel_at']  = pd.to_datetime(full['rel_at'], utc=True, errors='coerce')
-        log.info(f"Full Snowflake catalogue loaded for re-release lookup: {len(full)} films")
+        full = pd.read_parquet(path, columns=["film_id", "film", "rel_at", "dstbtr", "director"])
+        full = full[full["film"].notna()].reset_index(drop=True)
+        full["film_id"] = full["film_id"].astype(int)
+        full["rel_at"]  = pd.to_datetime(full["rel_at"], utc=True, errors="coerce")
+        log.info(f"Full film catalogue loaded from parquet: {len(full)} films")
         return full
-    except Exception as e:
-        log.warning(f"Snowflake unavailable for re-release lookup ({e})")
+    except FileNotFoundError:
+        log.warning(f"film_lookup.parquet not found at {path} — re-release filter will be skipped")
         return None
 
 

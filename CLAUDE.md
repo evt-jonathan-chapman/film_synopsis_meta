@@ -136,11 +136,13 @@ Concurrency: nano at 8 (`MAX_CONCURRENCY`), **mini+search at 2** (`META_MAX_CONC
 
 - **`config.py`** — single source of truth for all paths and constants. Reads `config.yaml` (Snowflake creds, data root). Import paths from here; never hardcode `~/Documents/data`.
 - **`models.py`** — model registry for LiteLLM paths. `DEFAULT_MODEL` is the synopsis nano model; `DEFAULT_FALLBACKS` is the fallback chain. To switch the synopsis model, change `DEFAULT_MODEL` here.
+- **`extraction.py::ExtractionTask`** — the core data structure that connects prompts to extractors. Each task holds the prompt text, JSON field schema, and output key. `load_prompts.py::load_tasks_from_yaml` converts YAML entries into `ExtractionTask` objects; both `LlmJsonExtractor` and `ResponsesExtractor` consume them. Also contains shared JSON parse + repair utilities used by all extractors.
 - **`refresh.py`** — diff-based orchestrator for all four LLM paths. The Dagster assets are thin wrappers around the four `refresh_*` functions here. `load_films_from_snowflake` is the canonical work-set loader (primary source is parquet snapshots, Snowflake join is for titles only).
 - **`films/sql.py`** — Snowflake SQL queries. `SQL_FILM_DETAILS` is the main join used by `load_films_from_snowflake` to fetch authoritative titles from `EDW_ENT_PRD.CURATED.DIM_VH_FILM`.
-- **`cast_main.py`** — legacy standalone cast enrichment script using `LlmJsonExtractor` (LiteLLM, no web_search). Predates `refresh.py`. Use `refresh.py` or Dagster instead; this file is kept for reference only.
-- **`ingest.py`** — `sync_synopses_sources` writes extracted synopses back to Snowflake after a synopsis run (called by `refresh_synopsis`, non-fatal if it fails).
 - **`title_cleaner.py`** — strips variant prefixes (`3D`, `IMAX`, `GC`) from titles before LLM prompt construction. Used by both `LlmJsonExtractor` and `FilmMetaExtractor`.
+- **`ingest.py`** — `sync_synopses_sources` writes extracted synopses back to Snowflake after a synopsis run (called by `refresh_synopsis`, non-fatal if it fails).
+- **`tmdb_fetch.py`** — fetches production company data from the TMDB API and maps companies to studio tiers. Used only by the `--vs-tmdb` flag in `diagnostics/inspect_film_meta.py`; not part of any extraction path.
+- **`cast_main.py`** — legacy standalone cast enrichment script using `LlmJsonExtractor` (LiteLLM, no web_search). Predates `refresh.py`. Use `refresh.py` or Dagster instead; this file is kept for reference only.
 
 ---
 
@@ -168,7 +170,7 @@ The printed "Run total: $X" for web_search paths uses `WEB_SEARCH_COST_USD` whic
 - **Errored films get auto-retried** — `main.py` puts failures into `film_meta_errors.json`, NOT the checkpoint. The next run's diff sees them as not-done and retries. To force-retry a specific film, delete its entry from `film_meta_progress.json`.
 - **TPM bound, not RPM** — film_meta concurrency is gated by tokens-per-minute (200k org cap, ~15k per web_search call). Don't bump `META_MAX_CONCURRENCY` past 2-3 without first raising the org's TPM tier.
 - **`refresh.py` and `main.py` must agree on the work-set** — both drive off the same parquet snapshots. If `main.py`'s loader changes, `refresh.py::load_films_from_snowflake` has to track it, or Dagster runs will silently process a different film set than ad-hoc runs.
-- **`vendored/cinema_admits_models/` is read-only** — these files are copies, not the source. Edit upstream in `cinema_admits_models/` and re-vendor (procedure in `vendored/cinema_admits_models/README.md`). The one in-repo modification — `from .encode_helper import EncHelper` relative-import patch — must be re-applied after re-vendoring.
+- **`vendored/cinema_admits_models/` is read-only** — these files are copies, not the source. Edit upstream in `cinema_admits_models/` and re-vendor (procedure in `vendored/cinema_admits_models/README.md`). The one in-repo modification — `from .encode_helper import EncHelper` relative-import patch — must be re-applied after re-vendoring. The key vendored file is `re_release_filter.py`, which filters re-release films from the work-set before extraction (used by `refresh.py`).
 - **Comscore cache is the checkpoint** — already-matched films (score ≥ `match_thresh`, default 0.80) are skipped on re-run; below-threshold films are retried. To force a full re-match, delete **both** `comscore_cache.parquet` and `comscore_review_needed.parquet`, or call `re_score()` instead of `build_mapping()`.
 - **Comscore manual overrides win and are never touched by `re_score()`** — they're applied first and forced to `confidence=manual`, `score=1.0`. The matcher writes the *review* file; the *overrides* file is created by a human.
 - **`match_thresh` (0.80) vs `HIGH_CONFIDENCE_SCORE` (0.92) are different gates** — anything ≥0.80 is a match (cached, not retried); only ≥0.92 within 365 days is labelled `high`. The 0.80–0.92 band is `borderline` and lands in the review file.

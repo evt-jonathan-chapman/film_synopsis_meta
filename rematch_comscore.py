@@ -72,6 +72,10 @@ def load_evt_films() -> pd.DataFrame:
         DATA_DIR / "look_ups" / "film_lookup.parquet",
         columns=["film_id", "film", "rel_at", "dstbtr"],
     ).drop_duplicates("film_id").reset_index(drop=True)
+    n_null = films["film"].isna().sum()
+    if n_null:
+        films = films[films["film"].notna()].reset_index(drop=True)
+        print(f"Dropped {n_null} rows with null film title")
     print(f"film_lookup: {len(films):,} films")
 
     # Drop festival/event/sports distributors — not in Comscore, inflates unmatched bucket.

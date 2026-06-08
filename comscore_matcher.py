@@ -162,12 +162,15 @@ class ComscoreMatcher:
             return max(
                 _rf_fuzz.ratio(a_n, b_n),
                 _rf_fuzz.token_sort_ratio(a_n, b_n),
+                # token_set_ratio handles "X presents Y" vs "X: Y" (Hobbs & Shaw pattern)
+                # where one side has an extra connective word not in the other.
+                _rf_fuzz.token_set_ratio(a_n, b_n),
             ) / 100.0
         return SequenceMatcher(None, a_n, b_n).ratio()
 
     @staticmethod
     def _article_variants(title: str) -> list[str]:
-        """Return article-transposed forms so 'THE MEG' also tries 'MEG, THE' and vice versa."""
+        """Return article-transposed and colon-split forms to broaden matching coverage."""
         variants = [title]
         t = title.strip()
         upper = t.upper()
@@ -183,6 +186,17 @@ class ComscoreMatcher:
                 rest = t[:-len(article)]
                 variants.append(f"{article[2:]} {rest}")
                 break
+        # Colon-split variants: Comscore often omits either the subtitle
+        # ("Peter Rabbit 2: The Runaway" → "Peter Rabbit 2") or the franchise
+        # prefix ("Star Wars: The Mandalorian and Grogu" → "The Mandalorian and
+        # Grogu"). Both sides are tried; MIN_LENGTH_RATIO in _score() suppresses
+        # short fragments that can't meaningfully match.
+        if ': ' in t:
+            pre, post = t.split(': ', 1)
+            if pre.strip():
+                variants.append(pre.strip())
+            if post.strip():
+                variants.append(post.strip())
         return list(dict.fromkeys(variants))  # deduplicate, preserve order
 
     # ── Comscore prep ────────────────────────────────────────────────────────
