@@ -43,13 +43,13 @@ from films import sql as films_sql
 
 # Set to a list of film_ids to target specific films; None = all films in parquets
 # Load from adhoc_updates parquet if present (generated externally for gap-fill runs)
-# _adhoc_path = DATA_DIR / 'adhoc_updates' / 'film_ids_to_encode.parquet'
-# if _adhoc_path.exists():
-#     FILM_IDS = pd.read_parquet(_adhoc_path)['film_id'].astype(int).tolist()
-#     print(f"Loaded {len(FILM_IDS)} film IDs from {_adhoc_path}")
-# else:
-FILM_IDS = None
-# FILM_IDS = [57603, 57343, 59530, 60336, 60261, 60560]
+_adhoc_path = DATA_DIR / 'adhoc_updates' / 'film_ids_to_encode.parquet'
+if _adhoc_path.exists():
+    FILM_IDS = pd.read_parquet(_adhoc_path)['film_id'].astype(int).tolist()
+    print(f"Loaded {len(FILM_IDS)} film IDs from {_adhoc_path}")
+else:
+    FILM_IDS = None
+# FILM_IDS = [59534]  # example: target a single film
 
 # Quota-recovery sanity-check: uncomment to run only the first N films that
 # previously failed with "exceeded your current quota". Lets you verify the
@@ -64,9 +64,9 @@ FILM_IDS = None
 
 SAMPLE_SIZE   = 0          # 0 = all; N = first N films by release date
 
-RUN_SYNOPSIS  = False       # extract synopsis features via LLM
-RUN_CAST      = True      # enrich cast profiles via LLM
-RUN_DIRECTOR  = True      # enrich director profiles via LLM
+RUN_SYNOPSIS  = True        # extract synopsis features via LLM
+RUN_CAST      = False      # enrich cast profiles via LLM
+RUN_DIRECTOR  = False      # enrich director profiles via LLM
 RUN_META      = False      # web-grounded film_meta extraction (studios/cast/genres/budget/trailers)
 RUN_ENCODE    = False    # DEPRECATED 2026-05-19 — encoding moved to cinema_admits_models/build_data/encode_llm_features.py. The encode_*.py scripts have been moved to depreciated/encoding/. Leave False; flip True only for legacy reruns.
 

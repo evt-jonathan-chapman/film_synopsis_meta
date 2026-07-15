@@ -37,13 +37,58 @@ except ImportError:
 
 from config import DATA_DIR
 
+# Variant-strip patterns — mirrored from cinema_admits_models/encode_helper.py.
+# Applied in order; each pattern is substituted once (not iteratively).
+# Used to identify EVT film_ids that are format/event/festival variants of
+# the same base film so one Comscore cs_id can be inherited by all variants.
+_VARIANT_STRIP = [
+    # Format prefixes
+    (re.compile(r"^3D[\s\-]+",                            re.I), ""),
+    (re.compile(r"^GC\s+",                                re.I), ""),
+    # Format suffixes
+    (re.compile(r"\s*[-–]\s*3D$",                         re.I), ""),
+    (re.compile(r"\s*[-–]\s*IMAX(\s+3D)?$",               re.I), ""),
+    (re.compile(r"\s+\(3D\)$",                            re.I), ""),
+    (re.compile(r"\s+\(IMAX\)$",                          re.I), ""),
+    (re.compile(r"\s*[-–]\s*SCREEN\s*X\b.*$",             re.I), ""),
+    (re.compile(r"\s*[-–]\s*70MM$",                       re.I), ""),
+    # Special-screening / event suffixes
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+SCREENING[S]?$",    re.I), ""),
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+EVENT$",            re.I), ""),
+    (re.compile(r"\s*[-–]\s*EVENT\s+CINEMA$",             re.I), ""),
+    (re.compile(r"\s*[-–]\s*BONUS\s+CONTENT$",            re.I), ""),
+    (re.compile(r"\s*[-–]\s*SING[\s\-]?ALONG$",           re.I), ""),
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+Q\s+AND\s+A.*$",    re.I), ""),
+    (re.compile(r"\s*[-–]\s*BLOCK\s+PARTY\s+EDITION!?$",  re.I), ""),
+    (re.compile(r":\s*THE\s+VALENTINE\s+ENCORE$",         re.I), ""),
+    # Festival / distributor programme prefixes
+    (re.compile(r"^(?:TFF|FFF|MIFF|CFF|MF)\s*[-–]?\s+",  re.I), ""),
+    # Event/tour suffixes used by EVT that Comscore doesn't carry
+    (re.compile(r"\s*[-–]\s*RE[\s\-]?RELEASE$",           re.I), ""),
+    (re.compile(r"\s*[-–]\s*ROAD\s+TRIP$",                re.I), ""),
+    # Language variants ("- HINDI VERSION", "- TAMIL DUBBED", "- HINDI", etc.)
+    # TELEGU is a common EVT typo for TELUGU — both forms included.
+    # Mirrors the _LANG_SUFFIX regex used in _normalise_title so that scoring
+    # and variant propagation apply the same language stripping rules.
+    (re.compile(
+        r'[\s\-–]+(?:'
+        r'(?:WITH\s+)?ENGLISH\s+SUBTITLES?|'
+        r'HINDI|TAMIL|TELUGU|TELEGU|KANNADA|MALAYALAM|MARATHI|PUNJABI|BENGALI|'
+        r'JAPANESE|KOREAN|MANDARIN|CANTONESE|FRENCH|SPANISH|ITALIAN|'
+        r'PORTUGUESE|GERMAN|THAI|INDONESIAN|ARABIC|TURKISH|ENGLISH'
+        r')(?:\s+(?:VERSION|DUBBED|SUBTITLED))?\s*$',
+        re.I
+    ), ""),
+]
+
 
 class ComscoreMatcher:
 
-    COMSCORE_DIR     = DATA_DIR / "comscore"
-    CACHE_PATH       = str(COMSCORE_DIR / "comscore_cache.parquet")
-    REVIEW_PATH      = str(COMSCORE_DIR / "comscore_review_needed.parquet")
-    MANUAL_OVERRIDES = str(COMSCORE_DIR / "comscore_manual_overrides.parquet")
+    COMSCORE_DIR         = DATA_DIR / "comscore"
+    CACHE_PATH           = str(COMSCORE_DIR / "comscore_cache.parquet")
+    REVIEW_PATH          = str(COMSCORE_DIR / "comscore_review_needed.parquet")
+    MANUAL_OVERRIDES     = str(COMSCORE_DIR / "comscore_manual_overrides.parquet")  # legacy
+    MANUAL_OVERRIDES_CSV = str(COMSCORE_DIR / "comscore_manual_overrides.csv")      # preferred
 
     HIGH_CONFIDENCE_SCORE = 0.92
     MAX_DAYS_HIGH_CONF    = 365
@@ -69,15 +114,17 @@ class ComscoreMatcher:
     _YEAR_PAREN      = re.compile(r'\s*\(\d{4}\)\s*$')
 
     # Language/version qualifiers appended by EVT — stripped before scoring so
-    # "PATHAAN - HINDI" matches "PATHAAN", "SUZUME JAPANESE" matches "SUZUME", etc.
+    # "PATHAAN - HINDI" matches "PATHAAN", "DARBAR - TAMIL VERSION" matches
+    # "DARBAR", "SUZUME JAPANESE" matches "SUZUME", etc.
+    # Matches an optional VERSION / DUBBED / SUBTITLED suffix after the language
+    # name so "- HINDI VERSION" and "- HINDI DUBBED" are both stripped.
     _LANG_SUFFIX = re.compile(
         r'[\s\-–]+(?:'
+        r'(?:WITH\s+)?ENGLISH\s+SUBTITLES?|'   # longest form first
         r'HINDI|TAMIL|TELUGU|KANNADA|MALAYALAM|MARATHI|PUNJABI|BENGALI|'
         r'JAPANESE|KOREAN|MANDARIN|CANTONESE|FRENCH|SPANISH|ITALIAN|'
-        r'PORTUGUESE|GERMAN|THAI|INDONESIAN|ARABIC|TURKISH|'
-        r'ENGLISH\s*(?:VERSION|DUBBED)?|'
-        r'(?:WITH\s+)?ENGLISH\s+SUBTITLES?'
-        r')\s*$',
+        r'PORTUGUESE|GERMAN|THAI|INDONESIAN|ARABIC|TURKISH|ENGLISH'
+        r')(?:\s+(?:VERSION|DUBBED|SUBTITLED))?\s*$',
         re.IGNORECASE,
     )
 
@@ -202,7 +249,7 @@ class ComscoreMatcher:
     # ── Comscore prep ────────────────────────────────────────────────────────
 
     def _prep_comscore(self, cs_df):
-        """Drop alt-content rows, parse dates, attach year."""
+        """Drop alt-content rows, deduplicate to one row per title, parse dates."""
         cs = cs_df.copy()
 
         # Hide concert/sports/etc. — EVT side doesn't have these and they're
@@ -212,6 +259,17 @@ class ComscoreMatcher:
             cs = cs[cs["is_alt_content"].fillna(False) == False].reset_index(drop=True)
             print(f"Dropped {n_before - len(cs):,} alt-content rows "
                   f"({len(cs):,} film rows remain)")
+
+        # The Comscore SQL joins IBOE_TITLES to IBOE_FLASH_GROSS_STATE_TITLE,
+        # producing one row per AU state/territory for the same title_global_id.
+        # All title columns are identical across state rows — only state_global_id
+        # differs. Deduplicate to one row per film before scoring so each title
+        # is evaluated once rather than ~8 times.
+        n_before = len(cs)
+        cs = cs.drop_duplicates(subset=[self.ID_COL], keep="first").reset_index(drop=True)
+        if n_before != len(cs):
+            print(f"Deduplicated Comscore: {n_before:,} state-level rows → "
+                  f"{len(cs):,} unique titles")
 
         cs["_release_date"] = pd.to_datetime(cs[self.DATE_COL], errors="coerce")
         cs["_year"]         = cs["_release_date"].dt.year
@@ -280,47 +338,212 @@ class ComscoreMatcher:
             record[f"cs_{c}"] = cs_row.get(c)
         return record
 
+    # ── Variant propagation ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _strip_variant(title: str) -> str:
+        """Strip format/event/festival variant tags; return uppercase base title."""
+        t = str(title).upper().strip()
+        for pat, repl in _VARIANT_STRIP:
+            t = pat.sub(repl, t)
+        return re.sub(r"\s+", " ", t).strip()
+
+    def _propagate_variants(self, films: pd.DataFrame) -> int:
+        """
+        Inherit cs_id from a matched EVT film to all unmatched variants.
+
+        For each unmatched film whose title reduces to a different base (via
+        _strip_variant), search matched films in scope for the same base title
+        within ±1 year. The highest-confidence match wins (manual > high >
+        borderline). Assigned confidence is 'variant', match_score=1.0 so the
+        row is skipped on future incremental runs.
+
+        Mirrors the consolidate_all_admits pattern from
+        cinema_admits_models/encode_helper.py — one cs_id covers all EVT
+        film_id variants (3D, IMAX, GC, sing-along …) of the same base film.
+
+        Returns the number of films newly propagated.
+        """
+        films = films.copy()
+        films["_base"] = films["film"].apply(self._strip_variant)
+        if "_evt_date" not in films.columns:
+            films["_evt_date"] = pd.to_datetime(films.get("rel_at"), errors="coerce")
+        if films["_evt_date"].dt.tz is not None:
+            films["_evt_date"] = films["_evt_date"].dt.tz_convert(None)
+
+        # Films eligible for propagation: unmatched true variants (base ≠ original)
+        conf_map = self._cache.set_index("film_id")["match_confidence"].to_dict()
+        to_propagate = films[
+            films["film_id"].apply(
+                lambda fid: conf_map.get(fid, "unmatched") in ("unmatched", "variant")
+            ) &
+            (films["_base"] != films["film"].str.upper().str.strip())
+        ]
+        if to_propagate.empty:
+            return 0
+
+        # Keeper pool: matched films in scope (any confidence ≥ threshold)
+        matched_confs = {"high", "borderline", "manual"}
+        matched_ids   = set(self._cache.loc[
+            self._cache["match_confidence"].isin(matched_confs), "film_id"
+        ])
+        keepers = films[films["film_id"].isin(matched_ids)].copy()
+        keepers["_base"] = keepers["film"].apply(self._strip_variant)
+        cache_idx = self._cache.set_index("film_id")
+        conf_prio = {"manual": 0, "high": 1, "borderline": 2}
+
+        n_propagated = 0
+        for _, vrow in to_propagate.iterrows():
+            base  = vrow["_base"]
+            vdate = vrow["_evt_date"]
+
+            same_base = keepers[keepers["_base"] == base]
+            if same_base.empty:
+                continue
+
+            # ±1 year date filter
+            if pd.notna(vdate):
+                same_base = same_base[same_base["_evt_date"].apply(
+                    lambda d: abs((vdate - d).days) <= 365 if pd.notna(d) else True
+                )]
+            if same_base.empty:
+                continue
+
+            # Highest-confidence keeper
+            best_keeper, best_prio = None, 9
+            for _, kr in same_base.iterrows():
+                if kr["film_id"] not in cache_idx.index:
+                    continue
+                crow = cache_idx.loc[kr["film_id"]]
+                if isinstance(crow, pd.DataFrame):
+                    crow = crow.iloc[0]
+                prio = conf_prio.get(crow["match_confidence"], 9)
+                if prio < best_prio:
+                    best_prio, best_keeper = prio, crow
+
+            if best_keeper is None:
+                continue
+
+            record = {c: None for c in self.CACHE_COLS}
+            for c in self.carry_cols:
+                record[f"cs_{c}"] = None
+            record.update({
+                "film_id":          vrow["film_id"],
+                "film":             vrow["film"],
+                "cs_id":            best_keeper["cs_id"],
+                "cs_title":         best_keeper["cs_title"],
+                "cs_release_date":  best_keeper["cs_release_date"],
+                "match_score":      1.0,
+                "matched_cs_title": best_keeper["matched_cs_title"],
+                "matched_via_col":  "variant",
+                "match_confidence": "variant",
+                "days_diff":        best_keeper["days_diff"],
+            })
+            for c in self.carry_cols:
+                col = f"cs_{c}"
+                if col in best_keeper.index:
+                    record[col] = best_keeper[col]
+
+            self._cache = (
+                pd.concat([self._cache, pd.DataFrame([record])], ignore_index=True)
+                .drop_duplicates("film_id", keep="last")
+            )
+            n_propagated += 1
+            print(f"  [variant] {vrow['film']!r} → cs_id={best_keeper['cs_id']} "
+                  f"(base: {base!r})")
+
+        return n_propagated
+
     # ── Manual overrides (highest precedence) ────────────────────────────────
 
+    def _load_overrides(self) -> pd.DataFrame:
+        """
+        Load manual overrides from CSV (preferred) and parquet (legacy).
+        Returns DataFrame[film_id, cs_id, evt_film]. CSV wins on duplicate film_id.
+        Rows with empty cs_id are skipped (treat as placeholders/TODOs).
+        """
+        rows: list[dict] = []
+
+        # Parquet (legacy — written by the old review-file flow)
+        if os.path.exists(self.MANUAL_OVERRIDES):
+            try:
+                mo = pd.read_parquet(self.MANUAL_OVERRIDES).dropna(subset=["manual_override_cs_id"])
+                for _, r in mo.iterrows():
+                    rows.append({"film_id": r["film_id"], "cs_id": r["manual_override_cs_id"],
+                                 "evt_film": None})
+                print(f"  Parquet overrides loaded: {len(mo)} row(s)")
+            except Exception as e:
+                print(f"  Parquet overrides skipped: {e}")
+
+        # CSV (preferred — required columns: film_id, cs_id
+        #       optional columns: evt_film, cs_title, note)
+        if os.path.exists(self.MANUAL_OVERRIDES_CSV):
+            try:
+                csv_mo = pd.read_csv(self.MANUAL_OVERRIDES_CSV).dropna(subset=["cs_id"])
+                for _, r in csv_mo.iterrows():
+                    rows.append({"film_id": r["film_id"], "cs_id": r["cs_id"],
+                                 "evt_film": r.get("evt_film")})
+                print(f"  CSV overrides loaded: {len(csv_mo)} row(s)")
+            except Exception as e:
+                print(f"  CSV overrides skipped: {e}")
+
+        if not rows:
+            return pd.DataFrame(columns=["film_id", "cs_id", "evt_film"])
+        return (
+            pd.DataFrame(rows)
+            .drop_duplicates("film_id", keep="last")  # CSV wins over parquet
+            .reset_index(drop=True)
+        )
+
     def _apply_manual_overrides(self, films, cs_prepped):
-        if not os.path.exists(self.MANUAL_OVERRIDES):
+        overrides = self._load_overrides()
+        if overrides.empty:
             return 0
-        try:
-            mo = pd.read_parquet(self.MANUAL_OVERRIDES)
-        except Exception as e:
-            print(f"Manual overrides skipped: {e}")
-            return 0
-        mo = mo.dropna(subset=["manual_override_cs_id"])
-        mo = mo[mo["film_id"].isin(films["film_id"])]
-        if mo.empty:
+
+        film_ids = set(films["film_id"])
+        overrides = overrides[overrides["film_id"].isin(film_ids)]
+        if overrides.empty:
             return 0
 
         cs_indexed = cs_prepped.set_index(self.ID_COL)
         applied = 0
-        for _, mrow in mo.iterrows():
-            fid    = mrow["film_id"]
-            cs_id  = mrow["manual_override_cs_id"]
-            name   = films.loc[films["film_id"] == fid, "film"].iloc[0]
-            if cs_id not in cs_indexed.index:
-                print(f"  [override] {name} → cs_id {cs_id} — NOT IN COMSCORE EXTRACT")
+        for _, ov in overrides.iterrows():
+            fid      = ov["film_id"]
+            cs_id    = ov["cs_id"]
+            expected = ov.get("evt_film")
+
+            name_rows = films.loc[films["film_id"] == fid, "film"]
+            if name_rows.empty:
                 continue
+            actual = name_rows.iloc[0]
+
+            # Validate: if evt_film was recorded in the override, the film_id must
+            # still point to the same title. film_ids can be recycled in EVT's DB.
+            if pd.notna(expected) and str(expected).upper().strip() != actual.upper().strip():
+                print(f"  [override SKIPPED] film_id={fid} — CSV has {expected!r} "
+                      f"but current dataset has {actual!r}. Update the CSV with the correct film_id.")
+                continue
+
+            if cs_id not in cs_indexed.index:
+                print(f"  [override] {actual} → {cs_id} — NOT IN COMSCORE EXTRACT")
+                continue
+
             cs_row = cs_indexed.loc[cs_id]
             if isinstance(cs_row, pd.DataFrame):
                 cs_row = cs_row.iloc[0]
-            # Force confidence=manual, score=1.0; reuse _build_record by handing
-            # it a fake "scored" list with the chosen row.
             fake_scored = [(
                 cs_id, 1.0, cs_row.get(self.TITLE_COLS[0], ""), "manual",
                 int(cs_row["_year"]) if pd.notna(cs_row["_year"]) else None,
                 9999, cs_row,
             )]
-            record = self._build_record(fid, name, fake_scored, confidence_label="manual")
+            record = self._build_record(fid, actual, fake_scored, confidence_label="manual")
             self._cache = (
                 pd.concat([self._cache, pd.DataFrame([record])], ignore_index=True)
                 .drop_duplicates("film_id", keep="last")
             )
             applied += 1
-            print(f"  [override] {name} → cs_id {cs_id} ({cs_row.get(self.TITLE_COLS[0])})")
+            print(f"  [override] {actual} → {cs_id} ({cs_row.get(self.TITLE_COLS[0])})")
+
         if applied:
             self._save_cache()
         return applied
@@ -401,6 +624,14 @@ class ComscoreMatcher:
                 print(f"  [{i:>4}/{len(to_match)}]  high={n_high} borderline={n_border} unmatched={n_unmatched}")
 
         self._save_cache()
+
+        # 4. Propagate cs_id to format/event variants (3D, IMAX, GC, sing-along…)
+        #    that share a base title with an already-matched film in scope.
+        n_variant = self._propagate_variants(films)
+        if n_variant:
+            self._save_cache()
+            print(f"Variant propagation: {n_variant} film(s) assigned from base title.")
+
         self.mapping_df = (
             self._cache[self._cache["film_id"].isin(films["film_id"])]
             .copy()
@@ -492,13 +723,19 @@ class ComscoreMatcher:
                 evt_dates[r["film_id"]] = d
 
         new_rows, review_candidates = [], {}
-        n_changed = n_unchanged = n_demoted = n_promoted = n_skipped_manual = 0
+        n_changed = n_unchanged = n_demoted = n_promoted = n_skipped_manual = n_skipped_variant = 0
+        preserved_variants = []  # kept so we can re-add if films_df unavailable
 
         for _, r in self._cache.iterrows():
             row_dict = r.to_dict()
             if row_dict.get("match_confidence") == "manual":
                 new_rows.append(row_dict)
                 n_skipped_manual += 1
+                continue
+            if row_dict.get("match_confidence") == "variant":
+                # Re-propagated after main loop based on updated scores; skip here.
+                preserved_variants.append(row_dict)
+                n_skipped_variant += 1
                 continue
 
             fid      = row_dict["film_id"]
@@ -546,9 +783,28 @@ class ComscoreMatcher:
         self._save_cache()
 
         print(f"\nRe-score done — changed={n_changed} unchanged={n_unchanged} "
-              f"promoted={n_promoted} demoted={n_demoted} manual_skipped={n_skipped_manual}")
+              f"promoted={n_promoted} demoted={n_demoted} "
+              f"manual_skipped={n_skipped_manual} variant_skipped={n_skipped_variant}")
         print("Confidence breakdown:")
         print(self._cache["match_confidence"].fillna("legacy").value_counts().to_string())
+
+        # Re-propagate variants against the freshly re-scored cache.
+        if films_df is not None:
+            n_variant = self._propagate_variants(films_df)
+            if n_variant:
+                self._save_cache()
+                print(f"  Re-propagated {n_variant} variant film(s).")
+        elif preserved_variants:
+            # No date context to re-propagate — restore old variant rows as-is.
+            var_df = pd.DataFrame(preserved_variants)
+            self._cache = (
+                pd.concat([self._cache, var_df], ignore_index=True)
+                .drop_duplicates("film_id", keep="last")
+                .reset_index(drop=True)
+            )
+            self._save_cache()
+            print(f"  Preserved {len(preserved_variants)} variant row(s) "
+                  f"(pass films_df to re_score() to re-propagate).")
 
         if films_df is None:
             films_df = self._cache[["film_id", "film"]].copy()

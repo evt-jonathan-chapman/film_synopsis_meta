@@ -53,11 +53,7 @@ film_release AS (
 SELECT fr.*
 FROM film_release AS fr
 CROSS JOIN params AS p
-WHERE (
-    -- fr.RELEASE_DATE BETWEEN p.pre_covid_start AND p.pre_covid_end
-    -- OR
-    fr.RELEASE_DATE BETWEEN p.rel_at_start AND DATEADD(day, 28, p.rel_at_end)
-)
+WHERE fr.RELEASE_DATE BETWEEN p.rel_at_start AND p.rel_at_end
 AND CNTRY_ID = 'AU'
 ORDER BY fr.RELEASE_DATE DESC
 

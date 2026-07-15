@@ -85,6 +85,7 @@ Only Comscore rows within ±1 year of the EVT `rel_at` date are considered. If E
 | **borderline** | score ≥ 0.80 (match threshold) but not high |
 | **unmatched** | score < 0.80 |
 | **manual** | User-supplied override — always wins, never re-scored |
+| **variant** | Inherited from a matched film with the same base title (step 4 below) |
 
 `match_thresh = 0.80` — anything at or above this is cached and skipped on future runs.
 `HIGH_CONFIDENCE_SCORE = 0.92` — the higher bar for the `high` label.
@@ -92,6 +93,20 @@ Only Comscore rows within ±1 year of the EVT `rel_at` date are considered. If E
 ### 6. Tie-breaking
 
 When multiple Comscore rows tie on score, the one with the smallest `days_diff` (closest release date) wins.
+
+### 7. Variant propagation
+
+After the fuzzy match loop, `ComscoreMatcher._propagate_variants()` inherits a matched cs_id to all EVT format/event variants of the same base film.
+
+A film is a **variant** if `_strip_variant(film)` ≠ the original title (uppercased). Patterns stripped include:
+
+- Format prefixes/suffixes: `3D …`, `… - 3D`, `… - IMAX`, `… - IMAX 3D`, `… (3D)`, `… (IMAX)`, `… - SCREEN X`
+- Event suffixes: `… - SPECIAL SCREENING`, `… - SING-ALONG`, `… - BONUS CONTENT`, `… - EVENT CINEMA`, `… - SPECIAL Q AND A`
+- Festival prefixes: `TFF -`, `FFF -`, `MIFF -`, `CFF -`, `MF -`
+
+For each unmatched variant, the matcher finds a **keeper** — any matched film in scope with the same base title within ±1 year. Keeper preference: manual > high > borderline. The variant inherits the keeper's `cs_id` with `confidence='variant'`, `match_score=1.0` (so it's skipped on future incremental runs).
+
+These patterns are copied from `cinema_admits_models/encode_helper.py::_VARIANT_STRIP` so the Dagster pipeline can run without depending on the sibling repo.
 
 ---
 

@@ -6,7 +6,7 @@ LLM extraction of film metadata for the EVT box office model. **Raw extraction o
 
 **Data root:** `~/Documents/data` (shared with `cinema_admits_models`)
 
-See `DAGSTER.md` for Dagster-specific operational details.
+See `DAGSTER.md` for Dagster operational details. See `COMSCORE.md` for the Comscore matching deep-dive.
 
 ---
 
@@ -138,11 +138,16 @@ Concurrency: nano at 8 (`MAX_CONCURRENCY`), **mini+search at 2** (`META_MAX_CONC
 - **`models.py`** — model registry for LiteLLM paths. `DEFAULT_MODEL` is the synopsis nano model; `DEFAULT_FALLBACKS` is the fallback chain. To switch the synopsis model, change `DEFAULT_MODEL` here.
 - **`extraction.py::ExtractionTask`** — the core data structure that connects prompts to extractors. Each task holds the prompt text, JSON field schema, and output key. `load_prompts.py::load_tasks_from_yaml` converts YAML entries into `ExtractionTask` objects; both `LlmJsonExtractor` and `ResponsesExtractor` consume them. Also contains shared JSON parse + repair utilities used by all extractors.
 - **`refresh.py`** — diff-based orchestrator for all four LLM paths. The Dagster assets are thin wrappers around the four `refresh_*` functions here. `load_films_from_snowflake` is the canonical work-set loader (primary source is parquet snapshots, Snowflake join is for titles only).
+- **`films/main.py::get_films_sources(persisted=True)`** — alternative film loader used by the `films_source` Dagster asset. Tries `films/source_data/films.parquet` first; falls back to a full Snowflake pull via `tools/connections.py::SnowflakeDB`. Distinct from `refresh.py::load_films_from_snowflake` — both must stay in sync with each other.
 - **`films/sql.py`** — Snowflake SQL queries. `SQL_FILM_DETAILS` is the main join used by `load_films_from_snowflake` to fetch authoritative titles from `EDW_ENT_PRD.CURATED.DIM_VH_FILM`.
+- **`base_snowflake.py::SnowFlakeBase`** — minimal vendored Snowflake helper. Hard-coded to EVT Snowflake account (`mm31132.ap-southeast-2`); uses key-pair auth with a key path passed directly. Used by the main extraction path.
+- **`tools/connections.py::SnowflakeDB`** — richer Snowflake connection class with proxy detection, key-pair auth via env vars (`CABOODLE_SNOW_USER`, `CABOODLE_SNOW_ACCOUNT`, `SNOWFLAKE_KP_PATH`, `SNOWFLAKE_KP_AUTH`). Used by `films/main.py`. Also contains `CaboodleDB` (SQL Server) and `CaboodleProxy` for corporate proxy routing.
 - **`title_cleaner.py`** — strips variant prefixes (`3D`, `IMAX`, `GC`) from titles before LLM prompt construction. Used by both `LlmJsonExtractor` and `FilmMetaExtractor`.
 - **`ingest.py`** — `sync_synopses_sources` writes extracted synopses back to Snowflake after a synopsis run (called by `refresh_synopsis`, non-fatal if it fails).
+- **`post_process.py`** — postprocessor registry (`POSTPROCESSORS` dict) that maps task names to cleanup functions. Currently only `clean_names` is live; hooked in `ExtractionTask.postprocess` if set.
 - **`tmdb_fetch.py`** — fetches production company data from the TMDB API and maps companies to studio tiers. Used only by the `--vs-tmdb` flag in `diagnostics/inspect_film_meta.py`; not part of any extraction path.
 - **`cast_main.py`** — legacy standalone cast enrichment script using `LlmJsonExtractor` (LiteLLM, no web_search). Predates `refresh.py`. Use `refresh.py` or Dagster instead; this file is kept for reference only.
+- **`encode/`** — sklearn-based feature encoding transformers (`TopNTokenMapper`, `DynamicTopNAndPCA`, `EmbeddingPCA`, etc.). **Not part of the extraction pipeline** — this repo is raw-extraction only. These utilities are kept here for reference but encoding runs in `cinema_admits_models/build_data/`.
 
 ---
 
@@ -174,8 +179,10 @@ The printed "Run total: $X" for web_search paths uses `WEB_SEARCH_COST_USD` whic
 - **Comscore cache is the checkpoint** — already-matched films (score ≥ `match_thresh`, default 0.80) are skipped on re-run; below-threshold films are retried. To force a full re-match, delete **both** `comscore_cache.parquet` and `comscore_review_needed.parquet`, or call `re_score()` instead of `build_mapping()`.
 - **Comscore manual overrides win and are never touched by `re_score()`** — they're applied first and forced to `confidence=manual`, `score=1.0`. The matcher writes the *review* file; the *overrides* file is created by a human.
 - **`match_thresh` (0.80) vs `HIGH_CONFIDENCE_SCORE` (0.92) are different gates** — anything ≥0.80 is a match (cached, not retried); only ≥0.92 within 365 days is labelled `high`. The 0.80–0.92 band is `borderline` and lands in the review file.
+- **`confidence='variant'` is a fifth tier** — assigned by `_propagate_variants()` after the fuzzy loop. Format/event variants (3D, IMAX, GC, sing-along…) that share a base title with a matched film inherit its cs_id with `match_score=1.0`. Patterns mirror `cinema_admits_models/encode_helper.py::_VARIANT_STRIP`. Variants are excluded from the review file and skipped on incremental re-runs.
 - **Comscore SQL is windowed** — `sql/comscore_extract.sql` is AU-only and filtered to specific release-date windows (see `params` CTE). Films outside that window won't match because they're absent from the extract, not because the matcher failed.
 - **`rematch_comscore.py` needs `film_lookup.parquet`** — at `DATA_DIR/look_ups/film_lookup.parquet`. The comscore driver joins this for the `film` title column. If it's missing the load will raise `FileNotFoundError`.
+- **`diagnostics/inspect_comscore_unmatched.py` calls Snowflake at module level** — the top of the file runs `pull_comscore()` outside `main()`. Run as a script (`python diagnostics/inspect_comscore_unmatched.py`) rather than importing it; requires VPN + Snowflake creds.
 - **`cast_encode.py` / `director_encode.py` do not exist here** — they moved to `cinema_admits_models/build_data/`. Don't recreate them.
 - **`main.py::RUN_ENCODE` raises** with a pointer to the new encode locations — encoding is no longer done in this repo.
 

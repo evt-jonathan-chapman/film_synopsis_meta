@@ -17,7 +17,12 @@ from config import DATA_DIR, RAW_PARQUET_GLOBS_ALL, FILM_META_ENRICHED_PATH
 
 from rematch_comscore import pull_comscore
 
-# cs = pull_comscore()
+cs_all = pull_comscore()
+
+cs_cols = ["title_global_id", "film_name", "upper_name", "title_aka", "us_title_name", "short_name", "synopsis",
+           "is_alt_content", "orig_cntry", "cntry_id", "distr_global_id", "release_date"]
+
+cs = cs_all[cs_cols].drop_duplicates()
 
 OUT_PATH = "/Users/jonathanchapman/Documents/data/comscore/output"
 
@@ -38,7 +43,9 @@ BUCKETS = [
 #     for p in sorted(glob.glob(pattern)):
 #         parts.append(pd.read_parquet(p, columns=['film_id', 'week_admits']))
 
-fim_lookup = pd.read_parquet("/Users/jonathanchapman/Documents/data/look_ups/film_lookup.parquet")
+film_lookup_all = pd.read_parquet("/Users/jonathanchapman/Documents/data/look_ups/film_lookup.parquet")
+
+fim_lookup = film_lookup_all[film_lookup_all["rel_at"] >= cs["release_date"].min()]
 
 adaptation = pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id', 'adaptation_type'])
 
@@ -47,41 +54,42 @@ admits = fim_lookup[["film_id", "rel_at", "week1_admits"]]
 # 2. Load comscore cache
 cache = (
     pd.read_parquet(DATA_DIR / 'comscore' / 'comscore_cache.parquet')
-    .merge(fim_lookup[["film_id", "rel_at"]], how="left", on="film_id")
+    .merge(admits, how="left", on="film_id")
     .merge(adaptation, on='film_id', how='left')
 )
 
-# 3. Load adaptation_type from film_meta
-
-
-# 4. Join admits + adaptation_type onto cache
-joined = cache.merge(admits, on='film_id', how='left').merge(adaptation, on='film_id', how='left')
-
-# 5. Unmatched films sorted by admits
 unmatched = (
-    joined[joined['match_confidence'] == 'unmatched']
-    .sort_values('total_admits', ascending=False)
-    [['film_id', 'film', 'total_admits', 'match_score', 'adaptation_type']]
+    cache[cache['match_confidence'] == 'unmatched']
+    .sort_values('week1_admits', ascending=False)
+    [['film_id', 'film', 'week1_admits', 'match_score', 'adaptation_type']]
 )
 
 print(unmatched.head(30))
 print(f"\nTotal unmatched: {len(unmatched)}")
-print(f"Unmatched with <1000 admits: {(unmatched['total_admits'] < 1000).sum()}")
-print(f"Unmatched with <100 admits:  {(unmatched['total_admits'] < 100).sum()}")
+print(f"Unmatched with <1000 admits: {(unmatched['week1_admits'] < 1000).sum()}")
+print(f"Unmatched with <100 admits:  {(unmatched['week1_admits'] < 100).sum()}")
 print(f"\nUnmatched by adaptation_type:")
-print(unmatched.groupby('adaptation_type', dropna=False)['total_admits'].agg(['count', 'sum']).sort_values('sum', ascending=False).to_string())
+print(unmatched.groupby('adaptation_type', dropna=False)['week1_admits'].agg(['count', 'sum']).sort_values('sum', ascending=False).to_string())
+
+result = cache.groupby(["match_confidence", cache["rel_at"].dt.year]).agg(
+    {"film_id": "nunique"}
+)
+
+print(result.to_markdown())
+
+print(cache.groupby(["match_confidence"]).agg({"film_id": "nunique"}))
 
 
-cache.groupby("match_confidence").agg({"film_id": "nunique"})
+print(result.to_markdown())
 
 match_cat = ["borderline", "high", "unmatched"]
 
 for m in match_cat:
     
-    _df = joined[joined["match_confidence"]==m]
+    _df = cache[cache["match_confidence"]==m]
     
     _filename = f"{OUT_PATH}/{m}.csv"
-    _df.sort_values("total_admits", ascending=False).to_csv(_filename)
+    _df.sort_values("week1_admits", ascending=False).to_csv(_filename)
     
 
 def main():

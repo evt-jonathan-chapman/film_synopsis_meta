@@ -53,15 +53,30 @@ SKIP_DISTRIBUTORS = {
 }
 
 
+_CS_COLS = [
+    "title_global_id", "film_name", "upper_name", "title_aka",
+    "us_title_name", "short_name", "synopsis",
+    "is_alt_content", "orig_cntry", "cntry_id", "distr_global_id", "release_date",
+]
+
+
 def pull_comscore() -> pd.DataFrame:
     sb = SnowFlakeBase(SF_WAREHOUSE, SF_SCHEMA, SF_DATABASE)
     sb.create_snowflake_connection(SF_RSA_KEY)
     with open(COMSCORE_SQL_PATH) as f:
         sql = f.read()
-    cs = sb.return_query_output(sql)
+    cs_raw = sb.return_query_output(sql)
+    # The SQL joins IBOE_TITLES to IBOE_FLASH_GROSS_STATE_TITLE, producing one
+    # row per AU state for the same title_global_id. Keep only the columns the
+    # matcher and diagnostics need, then deduplicate to one row per film.
+    missing = [c for c in _CS_COLS if c not in cs_raw.columns]
+    if missing:
+        raise ValueError(f"Comscore extract missing expected columns: {missing}")
+    cs = cs_raw[_CS_COLS].drop_duplicates().reset_index(drop=True)
     cs['release_date'] = pd.to_datetime(cs['release_date'], errors='coerce')
-    print(f"Comscore: {len(cs):,} rows, {cs['release_date'].min().date()} → {cs['release_date'].max().date()}")
-    print("Comscore rows by year:")
+    print(f"Comscore: {len(cs_raw):,} raw rows → {len(cs):,} unique titles, "
+          f"{cs['release_date'].min().date()} → {cs['release_date'].max().date()}")
+    print("Comscore titles by year:")
     print(cs['release_date'].dt.year.value_counts().sort_index().to_string())
     return cs
 
