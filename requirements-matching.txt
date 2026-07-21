@@ -1,0 +1,28 @@
+# Lean dependency set for the Comscore/Gower matching path only
+# (dagster_matching_defs.py, rematch_comscore.py, rematch_gower.py, id_bridge.py).
+# No litellm/openai — this path is pure CPU fuzzy matching, no LLM calls.
+# See DAGSTER.md for why this is a separate requirements file.
+
+# Dagster
+dagster
+dagster-webserver
+
+# Core data
+pandas
+pyarrow
+numpy
+
+# Config / env
+PyYAML
+
+# Snowflake
+snowflake-connector-python
+snowflake-sqlalchemy
+sqlalchemy
+cryptography
+
+# HTTP
+requests
+
+# Fuzzy title matching
+rapidfuzz

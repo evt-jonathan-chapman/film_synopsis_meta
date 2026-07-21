@@ -1,9 +1,15 @@
 """
-Dagster definitions for film_synopsis_meta.
+Dagster definitions for film_synopsis_meta — LLM extraction paths only.
 
 One upstream asset (`films_source`) pulls the film list from Snowflake once.
 Four downstream assets (`synopsis`, `cast`, `directors`, `film_meta`) each
 consume it independently — so any one can be re-materialised on its own.
+
+Comscore/Gower matching (no LLM, no API — pure CPU fuzzy matching) lives in
+the separate `dagster_matching_defs.py` code location instead of here, so
+`dagster dev -f dagster_matching_defs.py` never has to import `refresh.py`'s
+`litellm`/`openai` dependencies. Run both processes side by side if you want
+both sets of assets available (see DAGSTER.md).
 
 Schedules:
   - nightly_schedule       — synopsis + cast + directors (cheap, ~$5/night)
@@ -22,7 +28,6 @@ from refresh import (
     refresh_directors,
     refresh_film_meta,
 )
-from rematch_comscore import refresh_comscore_match
 
 
 @asset
@@ -58,18 +63,6 @@ def film_meta(films_source: pd.DataFrame) -> dict:
     return refresh_film_meta(films_source)
 
 
-@asset(deps=[film_meta])
-def comscore_match() -> dict:
-    """Match EVT films → Comscore (IBOE_TITLES) rows.
-
-    Self-contained: pulls Comscore directly from Snowflake and builds the EVT
-    work-set from parquet snapshots + film_meta (needed for the concert-film
-    filter). Declared dep on film_meta so a fresh film_meta run marks this
-    stale.
-    """
-    return refresh_comscore_match()
-
-
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
 nightly_job = define_asset_job(
@@ -80,11 +73,6 @@ nightly_job = define_asset_job(
 film_meta_job = define_asset_job(
     "film_meta_job",
     selection=AssetSelection.assets(films_source, film_meta),
-)
-
-comscore_job = define_asset_job(
-    "comscore_job",
-    selection=AssetSelection.assets(comscore_match),
 )
 
 full_refresh_job = define_asset_job("full_refresh_job", selection="*")
@@ -104,7 +92,7 @@ film_meta_schedule = ScheduleDefinition(
 
 
 defs = Definitions(
-    assets=[films_source, synopsis, cast, directors, film_meta, comscore_match],
-    jobs=[nightly_job, film_meta_job, comscore_job, full_refresh_job],
+    assets=[films_source, synopsis, cast, directors, film_meta],
+    jobs=[nightly_job, film_meta_job, full_refresh_job],
     schedules=[nightly_schedule, film_meta_schedule],
 )

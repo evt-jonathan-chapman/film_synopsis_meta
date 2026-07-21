@@ -2,6 +2,15 @@
 
 Maps EVT `film_id` → Comscore `title_global_id` so that `IBOE_TITLES` + `IBOE_FLASH_GROSS` box office data can be joined onto EVT films.
 
+There's a second, independent source matched the same way — Gower box-office
+estimates, see `GOWER.md`. Both run their own fuzzy pass straight against
+the EVT catalogue; `id_bridge.py` joins the two results together afterwards
+(`film_id` / `cs_id` / `gower_id`). The matching engine itself
+(`ComscoreMatcher` below) is a thin subclass of
+`title_matcher.py::FuzzyTitleMatcher`, the shared base `GowerMatcher` also
+subclasses — everything in this file describing normalisation, scoring,
+variant propagation, and confidence tiers applies to Gower unchanged.
+
 ---
 
 ## Key files
@@ -9,9 +18,11 @@ Maps EVT `film_id` → Comscore `title_global_id` so that `IBOE_TITLES` + `IBOE_
 | File | Purpose |
 |---|---|
 | `sql/comscore_extract.sql` | One-off Snowflake pull of Comscore titles + release dates |
-| `comscore_matcher.py::ComscoreMatcher` | Matching logic — fuzzy title scoring, confidence tiers, cache I/O |
+| `title_matcher.py::FuzzyTitleMatcher` | Shared matching engine (normalisation, scoring, variant propagation, cache/review/override I/O) — used by both Comscore and Gower |
+| `comscore_matcher.py::ComscoreMatcher` | Comscore-specific column names/paths on top of `FuzzyTitleMatcher` |
 | `rematch_comscore.py` | Driver script — pulls SQL, loads EVT films, runs matcher |
 | `diagnostics/inspect_comscore_unmatched.py` | Audit unmatched/borderline films by admits + adaptation_type |
+| `id_bridge.py` | Outer-joins `comscore_cache.parquet` + `gower_cache.parquet` on `film_id` |
 
 Outputs under `~/Documents/data/comscore/`:
 
@@ -71,7 +82,7 @@ For each Comscore row, all five title columns are scored against all EVT title v
 
 Score = `max(ratio, token_sort_ratio)` from rapidfuzz (falls back to `difflib` if not installed), divided by 100.
 
-**Length-ratio guard:** if      score is forced to 0.0. This prevents short-title impostors (e.g. `AVATAR` matching `TÁR`).
+**Length-ratio guard:** if `min(len_a, len_b) / max(len_a, len_b) < MIN_LENGTH_RATIO` (0.5), score is forced to 0.0. This prevents short-title impostors (e.g. `AVATAR` matching `TÁR`).
 
 ### 4. Year window filter
 
@@ -155,7 +166,8 @@ matcher = ComscoreMatcher()
 matcher.re_score(cs, films)
 
 # Via Dagster (runs build_mapping — skips already-matched films)
-# Jobs → comscore_job → Launch Run
+# ./start_dagster_matching.sh, then Jobs → comscore_job → Launch Run
+# (separate Dagster process/code location from the LLM paths — see DAGSTER.md)
 ```
 
 **`build_mapping` vs `re_score`:**

@@ -14,20 +14,21 @@ _CFG_PATH = REPO_ROOT / 'config.yaml'
 with open(_CFG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
-_data    = Path(_cfg['paths']['main_dir'])
+_data    = Path(_cfg['paths']['main_dir']).expanduser()
 DATA_DIR = _data
 
 # ── Snowflake ──────────────────────────────────────────────────────────────────
 SF_WAREHOUSE = _cfg['snowflake']['warehouse']
 SF_DATABASE  = _cfg['snowflake']['database']
 SF_SCHEMA    = _cfg['snowflake']['schema']
-SF_RSA_KEY   = _cfg['snowflake']['rsa_key']
+SF_RSA_KEY   = str(Path(_cfg['snowflake']['rsa_key']).expanduser())
 
 # ── SQL ────────────────────────────────────────────────────────────────────────
-SQL_PATH     = Path(_cfg['paths']['sql_path'])
+SQL_PATH     = Path(_cfg['paths']['sql_path']).expanduser()
 THREE_D_SQL  = _cfg['paths']['three_d_sql']
 SQL_DIR           = REPO_ROOT / 'sql'
 COMSCORE_SQL_PATH = SQL_DIR / 'comscore_extract.sql'
+GOWER_SQL_PATH    = SQL_DIR / 'gower_export.sql'
 
 # ── Data paths (all under main_dir) ───────────────────────────────────────────
 _synopsis_dir = _cfg['paths']['synopsis_dir']
