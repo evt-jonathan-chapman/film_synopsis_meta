@@ -30,12 +30,17 @@ SQL_DIR           = REPO_ROOT / 'sql'
 COMSCORE_SQL_PATH = SQL_DIR / 'comscore_extract.sql'
 GOWER_SQL_PATH    = SQL_DIR / 'gower_export.sql'
 
+# ── S3 (meta output sync) ──────────────────────────────────────────────────────
+S3_BUCKET  = _cfg.get('s3', {}).get('bucket')
+S3_PREFIX  = _cfg.get('s3', {}).get('prefix', '')
+S3_PROFILE = _cfg.get('s3', {}).get('profile')
+
 # ── Data paths (all under main_dir) ───────────────────────────────────────────
 _synopsis_dir = _cfg['paths']['synopsis_dir']
 _cast_dir     = _cfg['paths']['cast_dir']
 
-_director_dir  = _cfg['paths'].get('director_dir',  'director_meta')
-_film_meta_dir = _cfg['paths'].get('film_meta_dir', 'film_meta')
+_director_dir  = _cfg['paths'].get('director_dir',  'meta_data/director_meta')
+_film_meta_dir = _cfg['paths'].get('film_meta_dir', 'meta_data/film_meta')
 
 SYNOPSES_EXTRACTED_PATH  = _data / _synopsis_dir  / 'synopses_extracted.parquet'
 CAST_ENRICHED_PATH       = _data / _cast_dir      / 'cast_enriched.parquet'
@@ -43,7 +48,8 @@ CAST_FEATURES_PATH       = _data / _cast_dir      / 'cast_features.parquet'
 DIRECTOR_ENRICHED_PATH   = _data / _director_dir  / 'director_enriched.parquet'
 DIRECTOR_FEATURES_PATH   = _data / _director_dir  / 'director_features.parquet'
 FILM_META_ENRICHED_PATH  = _data / _film_meta_dir / 'film_meta_enriched.parquet'
-ENCODED_META_DIR        = _data / 'encoded_film_meta'
+FILM_ID_VARIANTS_PATH    = _data / _film_meta_dir / 'film_id_variants.parquet'
+ENCODED_META_DIR        = _data / 'encoded_meta'
 
 # Raw parquet globs — combine all three for full film coverage
 RAW_PARQUET_GLOB      = str(_data / 'raw_from_snowflake'        / '*' / 'train' / 'train_raw_ds.parquet')

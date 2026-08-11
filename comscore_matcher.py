@@ -22,7 +22,7 @@ propagation, cache/review/override I/O) lives in title_matcher.py and is
 shared with gower_matcher.py::GowerMatcher — this class only supplies
 Comscore's column names and output paths.
 
-Outputs (under DATA_DIR/comscore/):
+Outputs (under DATA_DIR/title_matching/comscore/):
   - comscore_cache.parquet           keyed on EVT film_id
   - comscore_review_needed.parquet   borderline+unmatched, top-5 candidates
   - comscore_manual_overrides.csv    user fills manual_override_cs_id
@@ -34,7 +34,7 @@ from title_matcher import FuzzyTitleMatcher
 
 class ComscoreMatcher(FuzzyTitleMatcher):
 
-    COMSCORE_DIR         = DATA_DIR / "comscore"
+    COMSCORE_DIR         = DATA_DIR / "title_matching" / "comscore"
     CACHE_PATH           = str(COMSCORE_DIR / "comscore_cache.parquet")
     REVIEW_PATH          = str(COMSCORE_DIR / "comscore_review_needed.parquet")
     MANUAL_OVERRIDES     = str(COMSCORE_DIR / "comscore_manual_overrides.parquet")  # legacy

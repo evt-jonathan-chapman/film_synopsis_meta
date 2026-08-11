@@ -30,7 +30,7 @@ All LLM extractors are checkpoint-resumable — progress JSONs in `~/Documents/d
 
 `comscore_matcher.py::ComscoreMatcher` maps EVT `film_id` → Comscore `title_global_id` so IBOE_TITLES + IBOE_FLASH_GROSS can join onto EVT films. Driver: `rematch_comscore.py`. Comscore data is pulled once via `sql/comscore_extract.sql`.
 
-`gower_matcher.py::GowerMatcher` does the same for Gower's `GW_LIFE_TIME` box-office estimates, mapping EVT `film_id` → `gower_id` (`primary_title_no` on the Gower side). Driver: `rematch_gower.py`. Gower data is pulled once via `sql/gower_export.sql`. Both matchers subclass the shared `title_matcher.py::FuzzyTitleMatcher` engine and run **independently** against the EVT catalogue (Gower doesn't chain through Comscore) — see `GOWER.md` for exactly what differs (single title column, `primary_title_no` in place of `title_global_id`, no alt-content flag, multi-snapshot dedup).
+`gower_matcher.py::GowerMatcher` does the same for Gower's `GW_LIFE_TIME` box-office estimates, mapping EVT `film_id` → `gower_id` (`prmry_title_no` on the Gower side). Driver: `rematch_gower.py`. Gower data is pulled once via `sql/gower_export.sql`. Both matchers subclass the shared `title_matcher.py::FuzzyTitleMatcher` engine and run **independently** against the EVT catalogue (Gower doesn't chain through Comscore) — see `GOWER.md` for exactly what differs (single title column, `prmry_title_no` in place of `title_global_id`, no alt-content flag, multi-snapshot dedup).
 
 `id_bridge.py::build_id_bridge()` outer-joins `comscore_cache.parquet` + `gower_cache.parquet` on `film_id` into `id_bridge/film_id_bridge.parquet` (`film_id`, `cs_id`, `gower_id`, + each side's matched title/confidence) — the one file to read when you just need the crosswalk rather than either matcher's full detail.
 
@@ -70,6 +70,10 @@ python rematch_comscore.py                     # set LIMIT_FILMS at top of file 
 python rematch_gower.py                        # same LIMIT_FILMS pattern
 python id_bridge.py                            # join comscore_cache + gower_cache on film_id
 
+# Sync the four meta checkpoints (parquet + progress json) to S3 — see "S3 sync" below
+stax2aws login -i stax-au1 -o event            # refresh AWS session first (expires hourly)
+python s3_sync.py
+
 # Dagster (local) — two separate processes, see "Two Dagster code locations" below.
 # Preferred: these scripts handle venv + DAGSTER_HOME + .env sourcing.
 ./start_dagster.sh                             # LLM paths            → http://localhost:3000
@@ -103,11 +107,12 @@ Optional env:
 
 `dagster_defs.py` and `dagster_matching_defs.py` are **separate code locations, run as separate processes** — they're not combined into one `Definitions` object. The reason is dependency weight: `dagster_defs.py` imports `refresh.py`, which imports `litellm` at module level, so merely *loading* it (even just to run matching) forces installing `litellm`/`openai` — both large and prone to failing mid-download on flaky/corporate networks. `dagster_matching_defs.py` only imports `rematch_comscore.py`/`rematch_gower.py`/`id_bridge.py`, none of which touch `litellm`/`openai`, so it needs only `requirements-matching.txt`. Run `./start_dagster.sh` and/or `./start_dagster_matching.sh` (see `DAGSTER.md`).
 
-**`dagster_defs.py`** exposes one upstream `films_source` asset (single Snowflake pull) and four downstream assets — `synopsis`, `cast`, `directors`, `film_meta` — each callable independently.
+**`dagster_defs.py`** exposes one upstream `films_source` asset (single Snowflake pull), four downstream extraction assets — `synopsis`, `cast`, `directors`, `film_meta` — each callable independently, and one further downstream asset, `s3_sync` (see "S3 sync" below).
 
 Jobs:
 - `nightly_job` — synopsis + cast + directors, scheduled 02:00 daily
 - `film_meta_job` — film_meta only, scheduled 03:00 Sundays (separated because it's the $100+/run path)
+- `s3_sync_job` — s3_sync only, ad-hoc (separated because it needs its own AWS auth step)
 - `full_refresh_job` — everything in this code location, ad-hoc
 
 **`dagster_matching_defs.py`** exposes three self-contained assets — `comscore_match`, `gower_match`, `id_bridge` — with one job:
@@ -116,6 +121,12 @@ Jobs:
 `comscore_match` and `gower_match` do **not** consume `films_source` — each loads EVT films from parquet snapshots itself (via the shared `rematch_comscore.py::load_evt_films`), plus reads `film_meta_enriched.parquet` for the concert-film filter. Since `film_meta` lives in the *other* code location, neither declares a Dagster-level `deps=[film_meta]` — the functional dependency (the parquet must exist on disk) is still real, it just isn't tracked as a Dagster staleness link. `id_bridge` declares `deps=[comscore_match, gower_match]` (same code location, so this one *is* Dagster-tracked) and just outer-joins their two caches on `film_id` — no matching logic of its own.
 
 Schedules are **off by default** — toggle on in the UI. `dagster dev` runs both the webserver and the daemon; for headless, run `dagster-daemon run` separately (with `DAGSTER_HOME` set).
+
+### S3 sync
+
+`s3_sync.py::sync_meta_outputs_to_s3()` uploads the four LLM meta checkpoints — parquet + progress json for synopsis, film_meta, cast_meta, director_meta — to `s3://<s3.bucket>/<s3.prefix>/...` (config in `config.yaml`'s `s3:` block; `synopsis_v2` locally is renamed to `synopsis` on the S3 side). Deliberately **not** appended to the end of `refresh_synopsis`/`refresh_cast`/`refresh_directors`/`refresh_film_meta` — it's its own step (`s3_sync` asset, `s3_sync_job`) so the local parquet/progress-json stay the fast, no-network checkpoint, and the S3 upload can be triggered independently once a run is done.
+
+Auth is a Stax SSO profile (`stax-stax-au1-event` in `~/.aws/credentials`, generated by `stax2aws login`) whose session credentials **expire after 1 hour** (`~/stax2aws.yaml`'s `session-duration: 3600`). There's no automatic refresh — run `stax2aws login -i stax-au1 -o event` manually before triggering `s3_sync_job` (or the CLI), or it fails with a clear "no valid AWS credentials" error. This is a real gap for unattended weekly scheduling: as of now `s3_sync_job` has no cron schedule, precisely because nothing can refresh the SSO session on its own. When this moves into a real production environment, a long-lived service credential (IAM role/user scoped to this bucket prefix) should replace the Stax profile — swap `s3.profile` in `config.yaml` (or point `boto3.Session` at the default credential chain instead) and the rest of `s3_sync.py` is unaffected.
 
 ---
 
@@ -157,18 +168,16 @@ Concurrency: nano at 8 (`MAX_CONCURRENCY`), **mini+search at 2** (`META_MAX_CONC
 - **`models.py`** — model registry for LiteLLM paths. `DEFAULT_MODEL` is the synopsis nano model; `DEFAULT_FALLBACKS` is the fallback chain. To switch the synopsis model, change `DEFAULT_MODEL` here.
 - **`extraction.py::ExtractionTask`** — the core data structure that connects prompts to extractors. Each task holds the prompt text, JSON field schema, and output key. `load_prompts.py::load_tasks_from_yaml` converts YAML entries into `ExtractionTask` objects; both `LlmJsonExtractor` and `ResponsesExtractor` consume them. Also contains shared JSON parse + repair utilities used by all extractors.
 - **`refresh.py`** — diff-based orchestrator for all four LLM paths. The Dagster assets are thin wrappers around the four `refresh_*` functions here. `load_films_from_snowflake` is the canonical work-set loader (primary source is parquet snapshots, Snowflake join is for titles only).
-- **`films/main.py::get_films_sources(persisted=True)`** — alternative film loader used by the `films_source` Dagster asset. Tries `films/source_data/films.parquet` first; falls back to a full Snowflake pull via `tools/connections.py::SnowflakeDB`. Distinct from `refresh.py::load_films_from_snowflake` — both must stay in sync with each other.
-- **`films/sql.py`** — Snowflake SQL queries. `SQL_FILM_DETAILS` is the main join used by `load_films_from_snowflake` to fetch authoritative titles from `EDW_ENT_PRD.CURATED.DIM_VH_FILM`.
-- **`sql.py`** (repo root — distinct from `films/sql.py`) — synopsis write-back SQL consumed by `ingest.py`: `SQL_CURRENT_SYNOPSES` plus the STAGING→CURATED merge statements (`SQL_DELETE_STAGING_DEDUPE`, `SQL_UPDATE_STAGING_VARIANTS`, `SQL_MERGE_STAGING_TO_CURATED`) that push extracted synopses back to Snowflake.
-- **`base_snowflake.py::SnowFlakeBase`** — minimal vendored Snowflake helper. Hard-coded to EVT Snowflake account (`mm31132.ap-southeast-2`); uses key-pair auth with a key path passed directly. Used by the main extraction path.
-- **`tools/connections.py::SnowflakeDB`** — richer Snowflake connection class with proxy detection, key-pair auth via env vars (`CABOODLE_SNOW_USER`, `CABOODLE_SNOW_ACCOUNT`, `SNOWFLAKE_KP_PATH`, `SNOWFLAKE_KP_AUTH`). Used by `films/main.py`. Also contains `CaboodleDB` (SQL Server) and `CaboodleProxy` for corporate proxy routing.
+- **`films/main.py::get_films_sources(persisted=True)`** — alternative film loader used by the `films_source` Dagster asset. Tries `films/source_data/films.parquet` first; falls back to a full Snowflake pull via `base_snowflake.py::SnowFlakeBase` (same key-pair auth as `refresh.py::load_films_from_snowflake`). Distinct from `refresh.py::load_films_from_snowflake` — both must stay in sync with each other.
+- **`films/sql.py`** — Snowflake SQL queries. `SQL_FILM_DETAILS` is the main join used by `load_films_from_snowflake` to fetch authoritative titles from `EDW_ENT_PRD.CURATED.DIM_VH_FILM`. The `SYNOPSIS`/`ALT_SYNOPSIS` columns are explicitly cast to `VARCHAR(16777216)` — without it, Snowflake infers a narrower width from `DIM_VH_FILM.FILM_DESC`'s declared column width and truncation-errors on longer synopses from the forecast table.
+- **`base_snowflake.py::SnowFlakeBase`** — minimal vendored Snowflake helper. Hard-coded to EVT Snowflake account (`mm31132.ap-southeast-2`); uses key-pair auth (`SF_RSA_KEY` from `config.yaml`) with a key path passed directly. The one and only Snowflake auth path in this repo — used by both `refresh.py::load_films_from_snowflake` and `films/main.py::get_films_sources`.
 - **`title_cleaner.py`** — strips variant prefixes (`3D`, `IMAX`, `GC`) from titles before LLM prompt construction. Used by both `LlmJsonExtractor` and `FilmMetaExtractor`.
 - **`title_matcher.py::FuzzyTitleMatcher`** — shared fuzzy title-matching engine behind both `comscore_matcher.py::ComscoreMatcher` and `gower_matcher.py::GowerMatcher`: title normalisation/scoring, variant propagation, and cache/review/manual-override I/O. Subclasses set column names (`ID_COL`/`DATE_COL`/`TITLE_COLS` on the source side, `ID_FIELD`/`TITLE_FIELD`/`DATE_FIELD`/`MATCHED_TITLE_FIELD` on the cache side) and output paths; everything else is identical between sources. See `COMSCORE.md` / `GOWER.md` for the algorithm.
 - **`comscore_matcher.py::ComscoreMatcher`** / **`rematch_comscore.py`** — Comscore's column config on `FuzzyTitleMatcher` + driver script. `rematch_comscore.py::load_evt_films` is the canonical EVT work-set loader for *both* matching paths — `rematch_gower.py` imports it directly so Comscore and Gower always score against the same film catalogue.
-- **`gower_matcher.py::GowerMatcher`** / **`rematch_gower.py`** — Gower's column config on `FuzzyTitleMatcher` + driver script. See `GOWER.md` for what's different from Comscore (single title column, `primary_title_no` as ID, no alt-content flag, multi-snapshot dedup).
+- **`gower_matcher.py::GowerMatcher`** / **`rematch_gower.py`** — Gower's column config on `FuzzyTitleMatcher` + driver script. See `GOWER.md` for what's different from Comscore (single title column, `prmry_title_no` as ID, no alt-content flag, multi-snapshot dedup).
 - **`id_bridge.py::build_id_bridge()`** — outer-joins `comscore_cache.parquet` + `gower_cache.parquet` on `film_id` into `id_bridge/film_id_bridge.parquet`. Pure join, no matching logic.
+- **`s3_sync.py::sync_meta_outputs_to_s3()`** — uploads the four meta checkpoints (parquet + progress json) to S3. `SYNC_SPECS` is the explicit (local dir, S3 folder, filenames) list — deliberately not a glob, so stray `.bak`/errors files in `DATA_DIR/film_meta/` etc. never get swept up. See "S3 sync" above for auth.
 - **`dagster_defs.py`** / **`dagster_matching_defs.py`** — two separate Dagster code locations (see "Two Dagster code locations" above). The matching one deliberately never imports `refresh.py`, so it needs only `requirements-matching.txt`.
-- **`ingest.py`** — `sync_synopses_sources` writes extracted synopses back to Snowflake after a synopsis run (called by `refresh_synopsis`, non-fatal if it fails).
 - **`post_process.py`** — postprocessor registry (`POSTPROCESSORS` dict) that maps task names to cleanup functions. Currently only `clean_names` is live; hooked in `ExtractionTask.postprocess` if set.
 - **`tmdb_fetch.py`** — fetches production company data from the TMDB API and maps companies to studio tiers. Used only by the `--vs-tmdb` flag in `diagnostics/inspect_film_meta.py`; not part of any extraction path.
 - **`cast_main.py`** — legacy standalone cast enrichment script using `LlmJsonExtractor` (LiteLLM, no web_search). Predates `refresh.py`. Use `refresh.py` or Dagster instead; this file is kept for reference only.
@@ -207,15 +216,16 @@ The printed "Run total: $X" for web_search paths uses `WEB_SEARCH_COST_USD` whic
 - **Comscore manual overrides win and are never touched by `re_score()`** — they're applied first and forced to `confidence=manual`, `score=1.0`. The matcher writes the *review* file; the *overrides* file is created by a human.
 - **`match_thresh` (0.80) vs `HIGH_CONFIDENCE_SCORE` (0.92) are different gates** — anything ≥0.80 is a match (cached, not retried); only ≥0.92 within 365 days is labelled `high`. The 0.80–0.92 band is `borderline` and lands in the review file.
 - **`confidence='variant'` is a fifth tier** — assigned by `_propagate_variants()` after the fuzzy loop. Format/event variants (3D, IMAX, GC, sing-along…) that share a base title with a matched film inherit its cs_id with `match_score=1.0`. Patterns mirror `cinema_admits_models/encode_helper.py::_VARIANT_STRIP`. Variants are excluded from the review file and skipped on incremental re-runs.
-- **Comscore SQL is windowed** — `sql/comscore_extract.sql` is AU-only and filtered to specific release-date windows (see `params` CTE). Films outside that window won't match because they're absent from the extract, not because the matcher failed.
+- **Comscore SQL is windowed** — `sql/comscore_extract.sql` is AU-only, filtered to `RELEASE_DATE >= 2018-01-01` with no upper bound (the `params` CTE still carries vestigial `pre_covid_start`/`pre_covid_end`/`post_covid_start` columns that nothing selects on — don't read them as active filters). Films released before 2018 won't match because they're absent from the extract, not because the matcher failed.
 - **`rematch_comscore.py` needs `film_lookup.parquet`** — at `DATA_DIR/look_ups/film_lookup.parquet`. The comscore driver joins this for the `film` title column. If it's missing the load will raise `FileNotFoundError`.
 - **`diagnostics/inspect_comscore_unmatched.py` calls Snowflake at module level** — the top of the file runs `pull_comscore()` outside `main()`. Run as a script (`python diagnostics/inspect_comscore_unmatched.py`) rather than importing it; requires VPN + Snowflake creds.
 - **`cast_encode.py` / `director_encode.py` do not exist here** — they moved to `cinema_admits_models/build_data/`. Don't recreate them.
 - **`main.py::RUN_ENCODE` raises** with a pointer to the new encode locations — encoding is no longer done in this repo.
 - **Gower matching mirrors Comscore's rules exactly** (same cache-skip threshold, `high`/`borderline`/`unmatched`/`variant` tiers, `±1` year window) because both subclass `title_matcher.py::FuzzyTitleMatcher` — this includes the same "delete both cache + review parquet to force a full re-match" rule, just with `gower_` filenames instead of `comscore_`.
 - **Gower has no `gower_manual_overrides.csv` yet** — the override mechanism (column names driven by each matcher's `ID_FIELD`) is inherited from Comscore's and works the moment that file is created at `DATA_DIR/gower/gower_manual_overrides.csv` with a `gower_id` column; no code change needed. Comscore's `comscore_manual_overrides.csv` (with a `cs_id` column) already exists and is in active use.
-- **Gower's `ID_COL` is `primary_title_no`**, not a true global title ID like Comscore's `title_global_id` — it's the closest stable identifier the Gower extract has. Exposed downstream as the cache column `gower_id`.
+- **Gower's `ID_COL` is `prmry_title_no`**, not a true global title ID like Comscore's `title_global_id` — it's the closest stable identifier the Gower extract has. Exposed downstream as the cache column `gower_id`.
 - **`sql/gower_export.sql` returns up to 3 rows per title** (`snapshot_type` in `latest`/`1m_pre_release`/`3m_pre_release`) — `GowerMatcher._prep_source()` keeps only the `latest` snapshot (falling back to pre-release snapshots) before matching, so `gower_life_time_base` in the cache always reflects the most recent estimate, not an arbitrary snapshot.
+- **Gower matching is windowed to `rel_at >= GOWER_MIN_REL_DATE`** (currently 2025-01-01, in `rematch_gower.py`) — narrower than Comscore's window, and must be kept in sync with `sql/gower_export.sql`'s own `params.start_date`. EVT films released earlier are filtered out of the work-set before matching (not just left as noisy `unmatched` rows), since Gower has no candidate row for them at all. Deliberate for now — Gower is only needed 2025-onwards for another project; see `GOWER.md` for how to widen it back to full history later.
 
 ---
 

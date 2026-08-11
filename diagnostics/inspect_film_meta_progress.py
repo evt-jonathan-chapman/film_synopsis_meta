@@ -53,8 +53,8 @@ def get_openai_balance():
     print(f"Remaining:   ${remaining:.2f}")
 
 
-PROGRESS_PATH = DATA_DIR / 'film_meta' / 'film_meta_progress.json'
-ERRORS_PATH   = DATA_DIR / 'film_meta' / 'film_meta_errors.json'
+PROGRESS_PATH = DATA_DIR / 'meta_data' / 'film_meta' / 'film_meta_progress.json'
+ERRORS_PATH   = DATA_DIR / 'meta_data' / 'film_meta' / 'film_meta_errors.json'
 
 # Spyder default — applied only when no CLI args are passed (e.g. running via
 # `%runfile ...` without `--args`). Edit this list to change the default view.

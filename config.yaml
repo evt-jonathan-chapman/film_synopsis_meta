@@ -5,9 +5,16 @@ snowflake:
     rsa_key:   "~/Documents/git/rsa_key.p8"
 
 paths:
-    main_dir:  "~/Documents/data"
+    main_dir:  "~/Documents/data/entertainment"
     sql_path:  "~/Documents/git/evt_back_up/sql"
     three_d_sql:          "is_three_d.sql"
     synopsis_look_up_sql: "synopsis_look_up.sql"
-    synopsis_dir: "synopsis_v2"
-    cast_dir:     "cast_meta"
+    synopsis_dir:  "meta_data/synopsis_v2"
+    cast_dir:      "meta_data/cast_meta"
+    director_dir:  "meta_data/director_meta"
+    film_meta_dir: "meta_data/film_meta"
+
+s3:
+    bucket:  "378682127617-data-science-prod"
+    prefix:  "data/meta_data"
+    profile: "stax-stax-au1-event"

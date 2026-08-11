@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import DATA_DIR
 
-PROGRESS_PATH = DATA_DIR / 'cast_meta' / 'cast_progress.json'
-ERRORS_PATH   = DATA_DIR / 'cast_meta' / 'cast_errors.json'
+PROGRESS_PATH = DATA_DIR / 'meta_data' / 'cast_meta' / 'cast_progress.json'
+ERRORS_PATH   = DATA_DIR / 'meta_data' / 'cast_meta' / 'cast_errors.json'
 
 # Spyder default — applied only when no CLI args are passed.
 SPYDER_DEFAULT_ARGS: list[str] = []

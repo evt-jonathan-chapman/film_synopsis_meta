@@ -25,8 +25,11 @@ else
     echo "WARNING: .env not found — OPENAI_KEY must already be in the environment"
 fi
 
+PORT=3000
+URL="http://127.0.0.1:${PORT}"
+
 echo ""
-echo "Starting Dagster UI (LLM extraction paths) → http://127.0.0.1:3000"
+echo "Starting Dagster UI (LLM extraction paths) → $URL"
 echo ""
 echo "Jobs:"
 echo "  nightly_job     — synopsis + cast + directors (02:00 daily, schedules off by default)"
@@ -42,4 +45,17 @@ echo "run ./start_dagster_matching.sh alongside this one, or bypass it entirely:
 echo "  python rematch_comscore.py / python rematch_gower.py / python id_bridge.py"
 echo ""
 
-dagster dev -f dagster_defs.py
+dagster dev -f dagster_defs.py -p "$PORT" &
+DAGSTER_PID=$!
+trap 'kill "$DAGSTER_PID" 2>/dev/null' EXIT
+
+# Open the browser as soon as the UI responds, so you're not stuck copying the URL manually
+( for _ in $(seq 1 60); do
+    if curl -s -o /dev/null "$URL"; then
+        open "$URL"
+        break
+    fi
+    sleep 0.5
+  done ) &
+
+wait "$DAGSTER_PID"

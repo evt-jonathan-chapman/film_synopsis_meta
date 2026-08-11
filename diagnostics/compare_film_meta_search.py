@@ -68,7 +68,7 @@ MODEL_NAME = os.environ.get('FILM_META_MODEL', 'gpt-5.4-mini')
 MAX_CONCURRENCY = 4
 PROMPTS_PATH = str(_REPO / 'prompts' / 'film_meta_prompts.yaml')
 
-OUTPUT_DIR  = DATA_DIR / 'film_meta' / 'compare_search'
+OUTPUT_DIR  = DATA_DIR / 'meta_data' / 'film_meta' / 'compare_search'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

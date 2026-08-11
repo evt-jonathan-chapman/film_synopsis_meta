@@ -53,7 +53,7 @@ admits = fim_lookup[["film_id", "rel_at", "week1_admits"]]
 
 # 2. Load comscore cache
 cache = (
-    pd.read_parquet(DATA_DIR / 'comscore' / 'comscore_cache.parquet')
+    pd.read_parquet(DATA_DIR / 'title_matching' / 'comscore' / 'comscore_cache.parquet')
     .merge(admits, how="left", on="film_id")
     .merge(adaptation, on='film_id', how='left')
 )

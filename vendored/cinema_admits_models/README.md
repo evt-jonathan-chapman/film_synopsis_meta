@@ -5,15 +5,21 @@ sibling repository — edits will be overwritten the next time we re-vendor.
 
 ## Source
 
-Upstream repo: `/Users/jonathanchapman/Documents/git/cinema_admits_models`
+Upstream repo: `/Users/jonathan_chapman/Documents/git/cinema_admits_models`
 Vendored on: 2026-05-21
+Re-vendored on: 2026-08-11 — upstream had added `strip_format_variant` /
+`consolidate_all_admits` / `_VARIANT_STRIP` to `encode_helper.py` (used by
+`build_train.py::BuildTrain.create_merged_admits_column` upstream to merge
+format-variant *admits* rows) which our copy predated; nothing else changed
+in either file (see `git diff --stat` at the time: only that ~100-line
+addition, plus the local import patch below).
 
 ## Files
 
 | File | Upstream path | Used by |
 |---|---|---|
-| `re_release_filter.py` | `cinema_admits_models/re_release_filter.py` | `main.py::enrich_film_meta`, `refresh.py::_enrich_film_meta` — filters out re-release titles before LLM extraction |
-| `encode_helper.py` | `cinema_admits_models/encode_helper.py` | Imported transitively by `re_release_filter.py` (`EncHelper`) |
+| `re_release_filter.py` | `cinema_admits_models/re_release_filter.py` | `film_variant_merge.py::filter_variants` (fuzzy-matched reschedule detection), `main.py::enrich_film_meta` — filters/merges re-release and duplicate-booking titles before LLM extraction |
+| `encode_helper.py` | `cinema_admits_models/encode_helper.py` | `strip_format_variant` used directly by `film_variant_merge.py::filter_variants` (format-variant detection); also imported transitively by `re_release_filter.py` (`EncHelper`) |
 
 ## Local modifications
 
@@ -26,8 +32,8 @@ Vendored on: 2026-05-21
 If the upstream changes and you want to pick up the update:
 
 ```bash
-cp /Users/jonathanchapman/Documents/git/cinema_admits_models/re_release_filter.py vendored/cinema_admits_models/
-cp /Users/jonathanchapman/Documents/git/cinema_admits_models/encode_helper.py vendored/cinema_admits_models/
+cp /Users/jonathan_chapman/Documents/git/cinema_admits_models/re_release_filter.py vendored/cinema_admits_models/
+cp /Users/jonathan_chapman/Documents/git/cinema_admits_models/encode_helper.py vendored/cinema_admits_models/
 # Re-apply the local modification documented above.
 ```
 

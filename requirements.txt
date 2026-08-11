@@ -9,7 +9,7 @@ numpy
 
 # LLM
 openai
-litellm
+litellm==1.83.9
 
 # Config / env
 python-dotenv
@@ -29,3 +29,11 @@ requests
 
 # Used by vendored/cinema_admits_models/re_release_filter.py
 rapidfuzz
+
+# S3 sync (s3_sync.py)
+boto3
+
+# Spyder IDE console support — only needed if running scripts via Spyder's
+# %runfile against this venv; version pinned to what Spyder 6 requires
+# (>=3.1.0,<3.2.0)
+spyder-kernels==3.1.*

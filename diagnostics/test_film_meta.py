@@ -43,7 +43,7 @@ TEST_FILM = {
     "dstbtr":   "Lionsgate",
 }
 PROMPTS_PATH = str(_REPO / 'prompts' / 'film_meta_prompts.yaml')
-OUT_PATH     = DATA_DIR / "film_meta" / "test_run.json"
+OUT_PATH     = DATA_DIR / "meta_data" / "film_meta" / "test_run.json"
 
 # ── Parse CLI overrides ───────────────────────────────────────────────────────
 if len(sys.argv) >= 2:

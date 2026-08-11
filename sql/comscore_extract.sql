@@ -4,8 +4,8 @@ WITH params AS (
         DATE '2020-02-01'              AS pre_covid_end,
         DATE '2021-12-01'              AS post_covid_start,
         DATE '2018-01-01'              AS rel_at_start,
-        CURRENT_DATE                   AS rel_at_end,
-        DATEADD(month, -4, CURRENT_DATE) AS end_date
+--         CURRENT_DATE                   AS rel_at_end,
+--         DATEADD(month, -4, CURRENT_DATE) AS end_date
 ),
 
 film_release AS (
@@ -53,7 +53,7 @@ film_release AS (
 SELECT fr.*
 FROM film_release AS fr
 CROSS JOIN params AS p
-WHERE fr.RELEASE_DATE BETWEEN p.rel_at_start AND p.rel_at_end
+WHERE fr.RELEASE_DATE >= p.rel_at_start
 AND CNTRY_ID = 'AU'
 ORDER BY fr.RELEASE_DATE DESC
 

@@ -1,7 +1,9 @@
-SQL_FILM_DETAILS = '''select distinct
+SQL_FILM_DETAILS = '''-- Film dimension query joining directly to DBT source tables to avoid view truncation issues.
+-- Co-authored with CoCo
+select distinct
         f.FILM_ID,
         f.FILM_HO_CODE,
-        COALESCE(m.FILM, f.FILM) AS FILM_TITLE,
+        COALESCE(m.MOVIE_NAME, f.FILM) AS FILM_TITLE,
         d.DSTBTR AS DISTRIBUTOR_NAME,
         d.DSTRBTR_ID AS DISTRIBUTOR,
         g1.GNRE_1 AS GENRE_1_NAME,
@@ -15,18 +17,27 @@ SQL_FILM_DETAILS = '''select distinct
         FIL_OPEN_DATE AS FILM_OPEN_DATE,
         WEEKISO(COALESCE(FILM_NAT_OPEN_DATE, FIL_OPEN_DATE)) AS RELEASE_WEEK,
         MONTH(COALESCE(FILM_NAT_OPEN_DATE, FIL_OPEN_DATE)) AS RELEASE_MONTH,
-        m.ACTORS AS ACTOR_LIST,
-        m.DIRECTORS AS DIRECTOR_LIST,
-        COALESCE(m.SYNOPSIS, f.FILM_DESC) AS SYNOPSIS,
-        CASE WHEN f.FILM_DESC = COALESCE(m.SYNOPSIS, f.FILM_DESC) THEN NULL ELSE f.FILM_DESC END AS ALT_SYNOPSIS,
-        RATING_ID,
+        NULLIF(STRTOK_TO_ARRAY(
+            TRIM(REGEXP_REPLACE(
+                REPLACE(REPLACE(m.MAIN_CAST, '  ',' '),'.',''),
+                '\\t|\r\n|\\(.*?\\)| with | ?introducing | ?debutant | ?voices of ?| ?: | - | . | as | and | & |, ?|; ?| \\.', '|', 1, 0, 'i'
+            )), '|'), []) AS ACTOR_LIST,
+        NULLIF(STRTOK_TO_ARRAY(
+            TRIM(REGEXP_REPLACE(
+                REPLACE(REPLACE(m.DIRECTOR, '  ',' '),'.',''),
+                '\\t|\r\n|\\(.*?\\)| with | ?introducing | ?debutant | ?: | - | as | and | & |, ?|; ?| \\.', '|', 1, 0, 'i'
+            )), '|'), []) AS DIRECTOR_LIST,
+        m.SYNOPSIS AS IHUB_SYNOPSIS,
+        f.FILM_DESC AS VISTA_SYNOPSIS,
+        -- COALESCE(m.SYNOPSIS, f.FILM_DESC) AS SYNOPSIS,
+        m.RATING_ID,
         CASE WHEN STARTSWITH(f.FILM, '3D') THEN TRUE ELSE FALSE END AS IS_3D_VERSION
-    from EDW_ENT_PRD.CURATED.DIM_VH_FILM AS f
-    left join EDW_ENT_PRD.CURATED.DIM_VH_GNRE_1 AS g1 ON g1.GNRE_1_ID = f.GNRE1_ID
-    left join EDW_ENT_PRD.CURATED.DIM_VH_GNRE_1 AS g2 ON g2.GNRE_1_ID = f.GNRE2_ID
-    left join EDW_ENT_PRD.CURATED.DIM_VH_GNRE_1 AS g3 ON g3.GNRE_1_ID = f.GNRE3_ID
-    left join EDW_ENT_PRD.CURATED.DIM_VH_DSTRBTR AS d ON d.DSTRBTR_ID = f.DSTRBTR_ID
-    left join ENT_FORECAST_PRD.SEMANTIC.FORECAST_IHUB_MOVIE_AU AS m ON m.FILM_HO_CODE = f.FILM_HO_CODE
+    from DBT.EDW_ENT_PRD.DIM_VH_FILM AS f
+    left join DBT.EDW_ENT_PRD.DIM_VH_GNRE_1 AS g1 ON g1.GNRE_1_ID = f.GNRE1_ID
+    left join DBT.EDW_ENT_PRD.DIM_VH_GNRE_1 AS g2 ON g2.GNRE_1_ID = f.GNRE2_ID
+    left join DBT.EDW_ENT_PRD.DIM_VH_GNRE_1 AS g3 ON g3.GNRE_1_ID = f.GNRE3_ID
+    left join DBT.EDW_ENT_PRD.DIM_VH_DSTRBTR AS d ON d.DSTRBTR_ID = f.DSTRBTR_ID
+    left join DBT.EDW_ENT_PRD.S2S_IHUB_MOVIE_AU AS m ON m.MOVIE_CODE = f.FILM_HO_CODE
     where FILM_NAT_OPEN_DATE is not null
 '''
 

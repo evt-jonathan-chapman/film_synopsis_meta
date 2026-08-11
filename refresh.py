@@ -28,26 +28,31 @@ import re
 import sys
 from pathlib import Path
 
+import nest_asyncio
+nest_asyncio.apply()
+
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-
 import litellm
 litellm.success_callback = []
 litellm.failure_callback = []
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 
 from config import (
     DATA_DIR,
     SYNOPSES_EXTRACTED_PATH, CAST_ENRICHED_PATH,
-    DIRECTOR_ENRICHED_PATH, FILM_META_ENRICHED_PATH,
+    DIRECTOR_ENRICHED_PATH, FILM_META_ENRICHED_PATH, FILM_ID_VARIANTS_PATH,
     SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY,
 )
+from cleanup_film_meta import clean_film_meta_df
 from extractor import LlmJsonExtractor
 from film_meta_extractor import FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor
+from film_variant_merge import filter_variants
 from load_prompts import load_tasks_from_yaml
 from models import DEFAULT_MODEL, DEFAULT_FALLBACKS, MODELS
-from ingest import sync_synopses_sources
 from films import sql as films_sql
 
 logging.basicConfig(
@@ -68,12 +73,23 @@ META_MAX_CONCURRENCY = 2   # web_search calls bound by 200k TPM ≈ 13 req/min s
 META_BATCH_SIZE       = 25  # films per checkpoint flush — matches main.py
 META_BATCH_PAUSE_SECS = 3   # pause between batches to let TPM window reset
 
-FILM_META_CHECKPOINT_PATH = DATA_DIR / 'film_meta' / 'film_meta_progress.json'
-FILM_META_ERRORS_PATH     = DATA_DIR / 'film_meta' / 'film_meta_errors.json'
-CAST_CHECKPOINT_PATH      = DATA_DIR / 'cast_meta'     / 'cast_progress.json'
-CAST_ERRORS_PATH          = DATA_DIR / 'cast_meta'     / 'cast_errors.json'
-DIRECTOR_CHECKPOINT_PATH  = DATA_DIR / 'director_meta' / 'director_progress.json'
-DIRECTOR_ERRORS_PATH      = DATA_DIR / 'director_meta' / 'director_errors.json'
+# An unknown-fame_tier actor is only worth retrying if some film they're in
+# still needs them — i.e. that film's already-resolved cast count is below
+# this. If every film they appear in already has this many known co-stars,
+# retrying them is low value (billing-order/lead-actor features already have
+# enough signal) and just burns web_search calls that mostly won't resolve
+# anyway. See the session's cast-backlog investigation for the data behind
+# this: at 3, ~72% of the unknown backlog is skippable with zero films
+# dropping below 3 known cast members.
+MIN_KNOWN_CAST_FOR_RETRY = 3
+
+SYNOPSIS_CHECKPOINT_PATH  = DATA_DIR / 'meta_data' / 'synopsis_v2'   / 'synopsis_progress.json'
+FILM_META_CHECKPOINT_PATH = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_progress.json'
+FILM_META_ERRORS_PATH     = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_errors.json'
+CAST_CHECKPOINT_PATH      = DATA_DIR / 'meta_data' / 'cast_meta'     / 'cast_progress.json'
+CAST_ERRORS_PATH          = DATA_DIR / 'meta_data' / 'cast_meta'     / 'cast_errors.json'
+DIRECTOR_CHECKPOINT_PATH  = DATA_DIR / 'meta_data' / 'director_meta' / 'director_progress.json'
+DIRECTOR_ERRORS_PATH      = DATA_DIR / 'meta_data' / 'director_meta' / 'director_errors.json'
 
 # Distributors with no extractable cast/budget/studios metadata.
 # Mirrors main.py::FILM_META_SKIP_DISTRIBUTORS.
@@ -95,10 +111,18 @@ FILM_META_SKIP_DISTRIBUTORS = {
 
 _AND_PREFIX = re.compile(r'^AND\s+', re.IGNORECASE)
 
+# Placeholder tokens Vista sometimes uses in actor_list instead of a real name
+# — e.g. CatVideoFest's "VARIOUS CATS FROM THE INTERWEB!", or generic "VARIOUS
+# ACTORS" for compilation/tour films. These will never resolve to a fame_tier
+# no matter how many times they're retried, so they're dropped at the source.
+_PLACEHOLDER_ACTOR_RE = re.compile(r'^VARIOUS\b', re.IGNORECASE)
+
 
 def _clean_actor(raw: str) -> str:
     name = raw.strip().upper()
     name = _AND_PREFIX.sub('', name).strip()
+    if _PLACEHOLDER_ACTOR_RE.match(name):
+        return ''
     return '' if name in ('AND', 'N/A', '') or len(name) <= 1 else name
 
 
@@ -148,12 +172,25 @@ def load_films_from_snowflake() -> pd.DataFrame | None:
         from base_snowflake import SnowFlakeBase
         sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
         sb.create_snowflake_connection(SF_RSA_KEY)
-        titles = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)[['film_id', 'film_title']]
-        titles['film_id'] = titles['film_id'].astype(int)
-        df = df.merge(titles, on='film_id', how='left')
-        log.info("Film titles joined from Snowflake")
+        snow = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)[
+            ['film_id', 'film_title', 'ihub_synopsis', 'vista_synopsis']
+        ]
+        snow['film_id'] = snow['film_id'].astype(int)
+        df = df.merge(snow, on='film_id', how='left')
+
+        # IHUB_SYNOPSIS is primary (matches the pre-split COALESCE(m.SYNOPSIS,
+        # f.FILM_DESC) behaviour); VISTA_SYNOPSIS becomes alt_synopsis whenever
+        # it actually differs, so both sources feed the extractor and both get
+        # diffed for changes on the next run (see _diff_synopsis_films).
+        ihub  = df['ihub_synopsis'].fillna('').str.strip()
+        vista = df['vista_synopsis'].fillna('').str.strip()
+        df['synopsis'] = df['ihub_synopsis'].where(ihub != '', df['vista_synopsis'])
+        df['alt_synopsis'] = df['vista_synopsis'].where(vista != ihub, None)
+        df = df.drop(columns=['ihub_synopsis', 'vista_synopsis'])
+        log.info("Film titles + synopsis (IHUB/VISTA) joined from Snowflake")
     except Exception as e:
-        log.warning(f"Snowflake unavailable ({e}) — using film_id as title fallback")
+        log.warning(f"Snowflake unavailable ({e}) — using film_id as title fallback, "
+                     f"keeping parquet-sourced synopsis (no alt_synopsis)")
         df['film_title'] = df['film_id'].astype(str)
 
     return df
@@ -183,59 +220,137 @@ def _ensure_films(df_films: pd.DataFrame | None) -> pd.DataFrame | None:
 # ── Diff helpers ──────────────────────────────────────────────────────────────
 
 def _diff_synopsis_films(df_films: pd.DataFrame) -> pd.DataFrame:
-    """Films that are new OR whose synopsis text has changed."""
+    """Films that are new OR whose synopsis (IHUB_SYNOPSIS) OR alt_synopsis
+    (VISTA_SYNOPSIS) text has changed — either source changing is enough to
+    trigger re-extraction, not just the primary one, since Vista's own
+    booking description can get corrected independently of IHUB's."""
     if not SYNOPSES_EXTRACTED_PATH.exists():
         log.info("No existing synopsis parquet — all films are new")
         return df_films
 
-    existing = pd.read_parquet(SYNOPSES_EXTRACTED_PATH, columns=['film_id', 'synopsis'])
+    existing = pd.read_parquet(SYNOPSES_EXTRACTED_PATH)
     existing['film_id'] = existing['film_id'].astype(int)
+    has_alt_old = 'alt_synopsis' in existing.columns
+    has_alt_new = 'alt_synopsis' in df_films.columns
+    existing_cols = ['film_id', 'synopsis'] + (['alt_synopsis'] if has_alt_old else [])
+    existing = existing[existing_cols]
     existing_ids = set(existing['film_id'])
 
     new = df_films[~df_films['film_id'].isin(existing_ids)]
 
+    rename_map = {'synopsis': 'synopsis_old'}
+    if has_alt_old:
+        rename_map['alt_synopsis'] = 'alt_synopsis_old'
     merged = df_films[df_films['film_id'].isin(existing_ids)].merge(
-        existing.rename(columns={'synopsis': 'synopsis_old'}),
+        existing.rename(columns=rename_map),
         on='film_id', how='left',
     )
-    changed = merged[merged['synopsis'].fillna('') != merged['synopsis_old'].fillna('')]
+    synopsis_changed = merged['synopsis'].fillna('') != merged['synopsis_old'].fillna('')
+    if has_alt_new and has_alt_old:
+        alt_changed = merged['alt_synopsis'].fillna('') != merged['alt_synopsis_old'].fillna('')
+    elif has_alt_new:
+        # alt_synopsis wasn't tracked before this run — treat any non-empty
+        # alt text as new/changed so it gets picked up once going forward.
+        alt_changed = merged['alt_synopsis'].fillna('') != ''
+    else:
+        alt_changed = pd.Series(False, index=merged.index)
+
+    changed = merged[synopsis_changed | alt_changed]
     result = pd.concat([new, changed[df_films.columns]], ignore_index=True)
-    log.info(f"Synopsis diff: {len(new)} new + {len(changed)} updated → {len(result)} to extract")
+    log.info(f"Synopsis diff: {len(new)} new + {len(changed)} updated "
+             f"(synopsis or alt_synopsis changed) → {len(result)} to extract")
     return result
 
 
 def _diff_actors(df_films: pd.DataFrame) -> list[str]:
-    """Actors not yet in cast_enriched.parquet OR cast_progress.json checkpoint.
+    """Actors not yet in cast_enriched.parquet OR cast_progress.json checkpoint,
+    PLUS already-done actors whose fame_tier came back "unknown" — but only if
+    some film they're in still needs them (see MIN_KNOWN_CAST_FOR_RETRY): if
+    every film they appear in already has enough resolved co-stars, retrying
+    them is low value and skipped, even though they'd otherwise qualify for
+    retry forever (see CLAUDE.md's ~70% hit-rate note for why unknowns don't
+    all resolve no matter how many times they're retried).
 
-    Reading both means a partially-completed run (checkpoint written, parquet
-    not yet flushed) doesn't get re-extracted from scratch.
+    Films from FILM_META_SKIP_DISTRIBUTORS (concerts/festivals/sports/event
+    cinema) are excluded before collecting actors — their "cast" is usually
+    band members or event participants, not film actors, so asking for a
+    fame_tier is a category error that will never resolve no matter how many
+    times it's retried (see e.g. Trafalgar Releasing concert films).
+
+    Reading both parquet and checkpoint means a partially-completed run
+    (checkpoint written, parquet not yet flushed) doesn't get re-extracted
+    from scratch.
     """
+    films = df_films
+    if 'dstbtr' in films.columns:
+        films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+
     all_actors: set[str] = set()
-    for val in df_films.get('actor_list', pd.Series(dtype=str)).dropna():
+    for val in films.get('actor_list', pd.Series(dtype=str)).dropna():
         for a in str(val).split('|'):
             a = _clean_actor(a)
             if a:
                 all_actors.add(a)
 
     done: set[str] = set()
+    retry: set[str] = set()
     if CAST_ENRICHED_PATH.exists():
-        done |= set(
-            pd.read_parquet(CAST_ENRICHED_PATH, columns=['actor_name'])
-            ['actor_name'].astype(str).str.upper().str.strip()
-        )
+        cast_df = pd.read_parquet(CAST_ENRICHED_PATH, columns=['actor_name', 'fame_tier'])
+        names = cast_df['actor_name'].astype(str).str.upper().str.strip()
+        done |= set(names)
+        retry |= set(names[cast_df['fame_tier'].astype(str).str.strip().str.lower() == 'unknown'])
     if CAST_CHECKPOINT_PATH.exists():
         with open(CAST_CHECKPOINT_PATH) as f:
-            done |= {str(k).upper().strip() for k in json.load(f).keys()}
+            checkpoint = json.load(f)
+        for k, v in checkpoint.items():
+            name = str(k).upper().strip()
+            done.add(name)
+            if str(v.get('fame_tier', '')).strip().lower() == 'unknown':
+                retry.add(name)
 
-    new = sorted(all_actors - done)
-    log.info(f"Cast diff: {len(new)} new actors  ({len(done)} already done across parquet+checkpoint)")
+    resolved = done - retry
+    retry_candidates = all_actors & retry
+
+    # Only retry a candidate if some film they're in has fewer than
+    # MIN_KNOWN_CAST_FOR_RETRY already-resolved co-stars.
+    min_known_for_actor: dict[str, int] = {}
+    if retry_candidates:
+        for val in films.get('actor_list', pd.Series(dtype=str)).dropna():
+            names = [_clean_actor(a) for a in str(val).split('|')]
+            names = [n for n in names if n]
+            if not names:
+                continue
+            n_known = sum(1 for n in names if n in resolved)
+            for n in names:
+                if n in retry_candidates and n_known < min_known_for_actor.get(n, n_known + 1):
+                    min_known_for_actor[n] = n_known
+
+    to_retry = {a for a in retry_candidates if min_known_for_actor.get(a, 0) < MIN_KNOWN_CAST_FOR_RETRY}
+    skipped_low_value = retry_candidates - to_retry
+
+    new = sorted((all_actors - done) | to_retry)
+    log.info(f"Cast diff: {len(all_actors - done)} new + {len(to_retry)} unknown-retry actors "
+             f"({len(skipped_low_value)} unknown actors skipped — every film they're in already has "
+             f">={MIN_KNOWN_CAST_FOR_RETRY} known co-stars) "
+             f"({len(done)} already done across parquet+checkpoint)")
     return new
 
 
 def _diff_directors(df_films: pd.DataFrame) -> list[str]:
-    """Directors not yet in director_enriched.parquet OR director_progress.json."""
+    """Directors not yet in director_enriched.parquet OR director_progress.json,
+    PLUS already-done directors whose director_tier came back "unknown"
+    (retried every run — see CLAUDE.md's ~70% hit-rate note; mirrors
+    _diff_actors' unknown-retry logic).
+
+    Films from FILM_META_SKIP_DISTRIBUTORS (concerts/festivals/sports/event
+    cinema) are excluded first — see _diff_actors' docstring for why.
+    """
+    films = df_films
+    if 'dstbtr' in films.columns:
+        films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+
     all_dirs: set[str] = set()
-    for val in df_films.get('director', pd.Series(dtype=str)).dropna():
+    for val in films.get('director', pd.Series(dtype=str)).dropna():
         # Snowflake pipes; raw parquets sometimes comma — handle both.
         parts = re.split(r'[|,]', str(val))
         for d in parts:
@@ -244,22 +359,86 @@ def _diff_directors(df_films: pd.DataFrame) -> list[str]:
                 all_dirs.add(d)
 
     done: set[str] = set()
+    retry: set[str] = set()
     if DIRECTOR_ENRICHED_PATH.exists():
-        done |= set(
-            pd.read_parquet(DIRECTOR_ENRICHED_PATH, columns=['director_name'])
-            ['director_name'].astype(str).str.strip()
-        )
+        dir_df = pd.read_parquet(DIRECTOR_ENRICHED_PATH, columns=['director_name', 'director_tier'])
+        names = dir_df['director_name'].astype(str).str.strip()
+        done |= set(names)
+        retry |= set(names[dir_df['director_tier'].astype(str).str.strip().str.lower() == 'unknown'])
     if DIRECTOR_CHECKPOINT_PATH.exists():
         with open(DIRECTOR_CHECKPOINT_PATH) as f:
-            done |= {str(k).strip() for k in json.load(f).keys()}
+            checkpoint = json.load(f)
+        for k, v in checkpoint.items():
+            name = str(k).strip()
+            done.add(name)
+            if str(v.get('director_tier', '')).strip().lower() == 'unknown':
+                retry.add(name)
 
-    new = sorted(all_dirs - done)
-    log.info(f"Director diff: {len(new)} new directors  ({len(done)} already done across parquet+checkpoint)")
+    to_retry = all_dirs & retry
+    new = sorted((all_dirs - done) | to_retry)
+    log.info(f"Director diff: {len(all_dirs - done)} new + {len(to_retry)} unknown-retry directors "
+             f"({len(done)} already done across parquet+checkpoint)")
     return new
 
 
-def _diff_film_meta(df_films: pd.DataFrame) -> pd.DataFrame:
-    """Films not yet in checkpoint JSON or enriched parquet, with skip-distributor filter applied.
+def _persist_variant_map(variant_map: pd.DataFrame) -> None:
+    """Merge freshly detected film_id variants into FILM_ID_VARIANTS_PATH.
+    keep='last' so a re-run with better data (richer synopsis/cast) can
+    flip which side is canonical without a stale row surviving."""
+    if variant_map.empty:
+        return
+    # Force to string — this file is written by two different code paths
+    # (this one and cleanup_film_meta.py's format-variant merge) and a raw
+    # Timestamp mixed with a string in the same parquet column breaks
+    # pyarrow on write. Normalizing here too (on top of the fix at the
+    # source) means a future third writer can't reintroduce the same bug.
+    for col in ('variant_rel_at', 'canonical_rel_at'):
+        if col in variant_map.columns:
+            variant_map[col] = variant_map[col].apply(lambda v: str(v) if pd.notna(v) else None)
+
+    FILM_ID_VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if FILM_ID_VARIANTS_PATH.exists():
+        existing = pd.read_parquet(FILM_ID_VARIANTS_PATH)
+        for col in ('variant_rel_at', 'canonical_rel_at'):
+            if col in existing.columns:
+                existing[col] = existing[col].apply(lambda v: str(v) if pd.notna(v) else None)
+        out = (pd.concat([existing, variant_map], ignore_index=True)
+               .drop_duplicates(subset='film_id', keep='last'))
+    else:
+        out = variant_map
+    out.to_parquet(FILM_ID_VARIANTS_PATH, index=False)
+    log.info(f"film_meta variants: {len(variant_map)} film_id(s) mapped onto a canonical "
+             f"release this run ({len(out)} total) → {FILM_ID_VARIANTS_PATH}")
+
+
+def _apply_variant_merge(df: pd.DataFrame, film_lookup: pd.DataFrame | None) -> pd.DataFrame:
+    """Drops genuine re-releases (keyword/year/language title match, no specific
+    pairing) and duplicate-booking variants (fuzzy-matched to another film_id
+    that already represents the same release — see film_variant_merge.py),
+    keeping only the canonical film_id. Persists the variant crosswalk so a
+    variant film_id can be resolved back to whichever film_id actually holds
+    the film_meta data.
+    """
+    if film_lookup is None or 'rel_at' not in film_lookup.columns:
+        return df
+    try:
+        df_filtered, variant_map = filter_variants(df, film_lookup)
+    except Exception as e:
+        log.warning(f"Variant merge skipped ({e})")
+        return df
+
+    n_dropped = len(df) - len(df_filtered)
+    if n_dropped:
+        log.info(f"film_meta re-releases/variants filtered: -{n_dropped} "
+                 f"({len(variant_map)} duplicate-booking, {n_dropped - len(variant_map)} keyword/year/language) "
+                 f"→ {len(df_filtered)}")
+    _persist_variant_map(variant_map)
+    return df_filtered
+
+
+def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) -> pd.DataFrame:
+    """Films not yet in checkpoint JSON or enriched parquet, with skip-distributor
+    filter and re-release/variant merge applied.
 
     Checks the checkpoint as well as the parquet so a partially-completed run (where
     the checkpoint has been written but the final parquet flush has not yet happened)
@@ -271,6 +450,8 @@ def _diff_film_meta(df_films: pd.DataFrame) -> pd.DataFrame:
         df = df[~df['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
         if n0 - len(df):
             log.info(f"film_meta skip-distributors: -{n0 - len(df)} → {len(df)}")
+
+    df = _apply_variant_merge(df, film_lookup)
 
     done_ids: set[int] = set()
     if FILM_META_CHECKPOINT_PATH.exists():
@@ -288,6 +469,36 @@ def _diff_film_meta(df_films: pd.DataFrame) -> pd.DataFrame:
 
 
 # ── Extraction steps ──────────────────────────────────────────────────────────
+
+def _sync_synopsis_checkpoint(df: pd.DataFrame) -> None:
+    """Regenerate synopsis_progress.json from the just-written parquet.
+
+    refresh.py's synopsis path never writes this checkpoint mid-run (see
+    _extract_synopses — it only flushes once, at the end), but main.py's own
+    synopsis path checks it (existence only, no diffing) to decide what's
+    already done. Without this, a film refresh.py just extracted would look
+    "not done" to main.py and get re-extracted from scratch — see CLAUDE.md's
+    "refresh.py and main.py must agree on the work-set" note.
+    """
+    if df.empty or 'film_id' not in df.columns:
+        return
+
+    def _to_json_native(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        return None if pd.isna(value) else value
+
+    checkpoint = {
+        str(row['film_id']): {k: _to_json_native(v) for k, v in row.items()}
+        for _, row in df.iterrows()
+    }
+    SYNOPSIS_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SYNOPSIS_CHECKPOINT_PATH, 'w') as f:
+        json.dump(checkpoint, f, default=str)
+    log.info(f"Synopsis checkpoint synced from parquet → {SYNOPSIS_CHECKPOINT_PATH} ({len(checkpoint)} films)")
+
 
 async def _extract_synopses(df: pd.DataFrame) -> None:
     if df.empty:
@@ -315,6 +526,15 @@ async def _extract_synopses(df: pd.DataFrame) -> None:
     )
 
     df_new = pd.DataFrame(results.values())
+
+    # alt_synopsis (VISTA_SYNOPSIS) is only ever used as extractor prompt
+    # context, never returned by the extraction tasks themselves — persist it
+    # explicitly so _diff_synopsis_films can detect a VISTA-only change on a
+    # future run even when the primary (IHUB) synopsis stays the same.
+    if 'alt_synopsis' in df.columns and 'film_id' in df_new.columns:
+        alt_lookup = df.set_index('film_id')['alt_synopsis']
+        df_new['alt_synopsis'] = df_new['film_id'].map(alt_lookup)
+
     if '_error' in df_new.columns:
         n_err = df_new['_error'].notna().sum()
         if n_err:
@@ -330,6 +550,7 @@ async def _extract_synopses(df: pd.DataFrame) -> None:
         out = df_new
     out.to_parquet(SYNOPSES_EXTRACTED_PATH, engine='pyarrow', index=False)
     log.info(f"Synopsis parquet → {SYNOPSES_EXTRACTED_PATH}  ({len(out)} total)")
+    _sync_synopsis_checkpoint(out)
 
     if extractor.token_usage:
         u = extractor.token_usage
@@ -441,8 +662,11 @@ async def _enrich_cast(new_actors: list[str]) -> None:
     CAST_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     if CAST_ENRICHED_PATH.exists():
         existing = pd.read_parquet(CAST_ENRICHED_PATH)
+        # keep='last' so a freshly retried actor's new result (df_new) overrides
+        # the stale row in existing — keep='first' would silently discard every
+        # unknown-retry update at flush time.
         out = (pd.concat([existing, df_new], ignore_index=True)
-               .drop_duplicates(subset='actor_name', keep='first'))
+               .drop_duplicates(subset='actor_name', keep='last'))
     else:
         out = df_new
     out.to_parquet(CAST_ENRICHED_PATH, engine='pyarrow', index=False)
@@ -556,8 +780,11 @@ async def _enrich_directors(new_directors: list[str]) -> None:
     DIRECTOR_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     if DIRECTOR_ENRICHED_PATH.exists():
         existing = pd.read_parquet(DIRECTOR_ENRICHED_PATH)
+        # keep='last' so a freshly retried director's new result (df_new) overrides
+        # the stale row in existing — keep='first' would silently discard every
+        # unknown-retry update at flush time.
         out = (pd.concat([existing, df_new], ignore_index=True)
-               .drop_duplicates(subset='director_name', keep='first'))
+               .drop_duplicates(subset='director_name', keep='last'))
     else:
         out = df_new
     out.to_parquet(DIRECTOR_ENRICHED_PATH, engine='pyarrow', index=False)
@@ -576,25 +803,13 @@ async def _enrich_directors(new_directors: list[str]) -> None:
 async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) -> None:
     """Batch-processes film_meta extraction with per-batch checkpoint + error JSON
     writes. Mirrors main.py::enrich_film_meta so Dagster runs are safely
-    interruptible — every BATCH_SIZE films, progress is persisted to disk."""
-    if df.empty:
-        return
+    interruptible — every BATCH_SIZE films, progress is persisted to disk.
 
-    if film_lookup is not None and 'rel_at' in film_lookup.columns:
-        try:
-            from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter
-            rr = ReReleaseFilter()
-            flagged = rr.flag(df.rename(columns={'film_title': 'film'}),
-                              film_lookup, title_col='film')
-            n_rr = int(flagged['rerelease_flag'].sum())
-            df = (flagged[flagged['rerelease_flag'] == 0]
-                  .rename(columns={'film': 'film_title'})
-                  .copy())
-            if n_rr:
-                log.info(f"film_meta re-releases filtered: -{n_rr} → {len(df)}")
-        except Exception as e:
-            log.warning(f"Re-release filter skipped ({e})")
-
+    `df` is expected to already have re-releases and duplicate-booking variants
+    filtered out by the caller (_diff_film_meta / refresh_film_meta's force
+    branch, via _apply_variant_merge) — this function no longer applies that
+    filter itself.
+    """
     if df.empty:
         return
 
@@ -719,6 +934,17 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
                .drop_duplicates(subset='film_id', keep='last'))
     else:
         out = df_new
+
+    # Genre normalize/consolidate/rarity-filter + format-variant dedup on the
+    # WHOLE accumulated corpus (existing + this batch) — cheap at this scale
+    # (~4-5k rows) and keeps every run internally consistent rather than only
+    # cleaning the newly extracted rows. See cleanup_film_meta.py.
+    out, out_variant_map, out_stats = clean_film_meta_df(out)
+    if out_stats['n_genre_changed'] or out_stats['n_variants_dropped']:
+        log.info(f"film_meta cleanup — {out_stats['n_genre_changed']} rows genre-normalized, "
+                 f"{out_stats['n_variants_dropped']} format-variant duplicates merged away")
+    _persist_variant_map(out_variant_map)
+
     out.to_parquet(FILM_META_ENRICHED_PATH, engine='pyarrow', index=False)
     log.info(f"film_meta parquet → {FILM_META_ENRICHED_PATH}  ({len(out)} films)")
 
@@ -744,10 +970,6 @@ def refresh_synopsis(df_films: pd.DataFrame | None = None, force: bool = False) 
         return {'path': 'synopsis', 'updated': False, 'reason': 'up_to_date'}
 
     asyncio.run(_extract_synopses(to_extract))
-    try:
-        sync_synopses_sources(SYNOPSES_EXTRACTED_PATH)
-    except Exception as e:
-        log.warning(f"Snowflake sync failed (non-fatal): {e}")
     return {'path': 'synopsis', 'updated': True, 'films_extracted': len(to_extract)}
 
 
@@ -757,8 +979,11 @@ def refresh_cast(df_films: pd.DataFrame | None = None, force: bool = False) -> d
         return {'path': 'cast', 'updated': False, 'reason': 'snowflake_unavailable'}
 
     if force:
+        films = df_films
+        if 'dstbtr' in films.columns:
+            films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
         actors: set[str] = set()
-        for val in df_films.get('actor_list', pd.Series(dtype=str)).dropna():
+        for val in films.get('actor_list', pd.Series(dtype=str)).dropna():
             for a in str(val).split('|'):
                 a = _clean_actor(a)
                 if a:
@@ -781,8 +1006,11 @@ def refresh_directors(df_films: pd.DataFrame | None = None, force: bool = False)
         return {'path': 'director', 'updated': False, 'reason': 'snowflake_unavailable'}
 
     if force:
+        films = df_films
+        if 'dstbtr' in films.columns:
+            films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
         dirs: set[str] = set()
-        for val in df_films.get('director', pd.Series(dtype=str)).dropna():
+        for val in films.get('director', pd.Series(dtype=str)).dropna():
             for d in re.split(r'[|,]', str(val)):
                 d = d.strip()
                 if d:
@@ -804,20 +1032,21 @@ def refresh_film_meta(df_films: pd.DataFrame | None = None, force: bool = False)
     if df_films is None:
         return {'path': 'film_meta', 'updated': False, 'reason': 'snowflake_unavailable'}
 
+    # film_lookup for the re-release/variant filter — pulls the FULL Snowflake
+    # catalogue, not just the curated work-set, so older releases outside the
+    # parquet snapshot window are still available for title matching.
+    film_lookup = load_full_film_catalogue()
+
     if force:
         df = df_films.copy()
         if 'dstbtr' in df.columns:
             df = df[~df['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+        df = _apply_variant_merge(df, film_lookup)
     else:
-        df = _diff_film_meta(df_films)
+        df = _diff_film_meta(df_films, film_lookup)
 
     if df.empty:
         return {'path': 'film_meta', 'updated': False, 'reason': 'up_to_date'}
-
-    # film_lookup for the re-release filter — pulls the FULL Snowflake catalogue,
-    # not just the curated work-set, so older releases outside the parquet
-    # snapshot window are still available for title matching.
-    film_lookup = load_full_film_catalogue()
 
     asyncio.run(_enrich_film_meta(df, film_lookup))
     return {'path': 'film_meta', 'updated': True, 'films_extracted': len(df)}

@@ -27,14 +27,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from cleanup_film_meta import clean_film_meta_df, persist_variant_map
 from extractor import LlmJsonExtractor
 from film_meta_extractor import FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor
+from film_variant_merge import filter_variants
 from load_prompts import load_tasks_from_yaml
 from models import DEFAULT_MODEL, DEFAULT_FALLBACKS, MODELS
 from config import (
     SYNOPSES_EXTRACTED_PATH, CAST_ENRICHED_PATH, CAST_FEATURES_PATH,
     DIRECTOR_ENRICHED_PATH, DIRECTOR_FEATURES_PATH,
-    FILM_META_ENRICHED_PATH,
+    FILM_META_ENRICHED_PATH, FILM_ID_VARIANTS_PATH,
     DATA_DIR, SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY,
 )
 from films import sql as films_sql
@@ -54,7 +56,7 @@ else:
 # Quota-recovery sanity-check: uncomment to run only the first N films that
 # previously failed with "exceeded your current quota". Lets you verify the
 # OpenAI top-up worked before kicking off a full Dagster run.
-# _qpath = DATA_DIR / 'film_meta' / 'film_meta_errors.json'
+# _qpath = DATA_DIR / 'meta_data' / 'film_meta' / 'film_meta_errors.json'
 # if _qpath.exists():
 #     import json as _json
 #     _errs = _json.loads(_qpath.read_text())
@@ -85,10 +87,10 @@ CAST_PROMPTS_PATH      = 'prompts/cast_prompts.yaml'
 DIRECTOR_PROMPTS_PATH  = 'prompts/director_prompts.yaml'
 FILM_META_PROMPTS_PATH = 'prompts/film_meta_prompts.yaml'
  
-CHECKPOINT_PATH            = DATA_DIR / 'synopsis_v2'    / 'synopsis_progress.json'
-DIRECTOR_CHECKPOINT_PATH   = DATA_DIR / 'director_meta'  / 'director_progress.json'
-FILM_META_CHECKPOINT_PATH  = DATA_DIR / 'film_meta'      / 'film_meta_progress.json'
-FILM_META_ERRORS_PATH      = DATA_DIR / 'film_meta'      / 'film_meta_errors.json'
+CHECKPOINT_PATH            = DATA_DIR / 'meta_data' / 'synopsis_v2'   / 'synopsis_progress.json'
+DIRECTOR_CHECKPOINT_PATH   = DATA_DIR / 'meta_data' / 'director_meta' / 'director_progress.json'
+FILM_META_CHECKPOINT_PATH  = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_progress.json'
+FILM_META_ERRORS_PATH      = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_errors.json'
 
 # ── Load films from parquets (all available train/test/pred dates) ────────────
 
@@ -100,7 +102,7 @@ _pred_paths = sorted(_glob.glob(str(DATA_DIR / 'prediction_from_snowflake' / '*'
 
 _parts = []
 for _p in _raw_paths + _pred_paths:
-    _df = pd.read_parquet(_p, columns=['film_id', 'synopsis', 'actor_list', 'rel_at', 'director'])
+    _df = pd.read_parquet(_p, columns=['film_id', 'synopsis', 'actor_list', 'rel_at', 'director', 'dstbtr'])
     _df['rel_at'] = pd.to_datetime(_df['rel_at'], utc=True)
     _parts.append(_df)
     _label = '/'.join(_p.replace('\\', '/').split('/')[-3:])
@@ -269,6 +271,12 @@ async def extract_synopses(df: pd.DataFrame) -> float:
 import re as _re
 _AND_PREFIX = _re.compile(r'^AND\s+', _re.IGNORECASE)
 
+# Placeholder tokens Vista sometimes uses in actor_list instead of a real name
+# — e.g. CatVideoFest's "VARIOUS CATS FROM THE INTERWEB!", or generic "VARIOUS
+# ACTORS" for compilation/tour films. These will never resolve to a fame_tier
+# no matter how many times they're retried, so they're dropped at the source.
+_PLACEHOLDER_ACTOR_RE = _re.compile(r'^VARIOUS\b', _re.IGNORECASE)
+
 def _clean_actor(raw: str) -> str:
     import json
     raw = str(raw).strip()
@@ -276,19 +284,29 @@ def _clean_actor(raw: str) -> str:
     out = []
     for a in items:
         name = _AND_PREFIX.sub('', str(a).strip()).upper().strip()
+        if _PLACEHOLDER_ACTOR_RE.match(name):
+            continue
         if name and name not in ('AND', 'N/A') and len(name) > 1:
             out.append(name)
     return out
 
 
-CAST_CHECKPOINT_PATH = DATA_DIR / 'cast_meta' / 'cast_progress.json'
+CAST_CHECKPOINT_PATH = DATA_DIR / 'meta_data' / 'cast_meta' / 'cast_progress.json'
 
 async def enrich_cast(df_source: pd.DataFrame) -> float:
     global _total_cost
     import json
 
+    # Concerts/festivals/sports/event cinema (FILM_META_SKIP_DISTRIBUTORS) —
+    # their "cast" is band members/event participants, not film actors, so a
+    # fame_tier lookup is a category error that never resolves. See refresh.py's
+    # _diff_actors for the same filter.
+    films = df_source
+    if 'dstbtr' in films.columns:
+        films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+
     all_actors: set[str] = set()
-    for val in df_source['actor_list'].dropna():
+    for val in films['actor_list'].dropna():
         all_actors.update(_clean_actor(val))
 
     # Load checkpoint
@@ -398,8 +416,13 @@ async def enrich_directors(df_source: pd.DataFrame) -> float:
     global _total_cost
     import json
 
+    # See enrich_cast for why concert/festival/sports films are excluded.
+    films = df_source
+    if 'dstbtr' in films.columns:
+        films = films[~films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+
     all_directors: set[str] = set()
-    for val in df_source['director'].dropna():
+    for val in films['director'].dropna():
         for d in str(val).split(','):
             d = d.strip()
             if d:
@@ -536,8 +559,10 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
     budget / description via OpenAI Responses API + web_search. Replaces the
     deprecated TMDB pipeline.
 
-    Drops concerts/festivals/sports (FILM_META_SKIP_DISTRIBUTORS) and re-releases
-    (via ReReleaseFilter) before calling the API.
+    Drops concerts/festivals/sports (FILM_META_SKIP_DISTRIBUTORS) and re-releases,
+    and merges duplicate-booking variants (format/reschedule — see
+    film_variant_merge.py::filter_variants) onto one canonical film_id, before
+    calling the API.
 
     Each output row also carries `evt_dstbtr` (EVT's authoritative AU
     distributor) so downstream consumers can override GPT's distribution entry
@@ -568,18 +593,21 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
     if n_skip:
         print(f"film_meta filter — skip distributors: -{n_skip} → {len(df_source)} remaining")
 
-    # ── Filter: re-releases ───────────────────────────────────────────────────
-    if film_lookup is not None and 'rel_at' in film_lookup.columns:
-        try:
-            from vendored.cinema_admits_models.re_release_filter import ReReleaseFilter
-            rr = ReReleaseFilter()
-            flagged = rr.flag(df_source.rename(columns={'film_title': 'film'}), film_lookup, title_col='film')
-            n_rr = int(flagged['rerelease_flag'].sum())
-            df_source = flagged[flagged['rerelease_flag'] == 0].rename(columns={'film': 'film_title'}).copy()
-            if n_rr:
-                print(f"film_meta filter — re-releases:       -{n_rr} → {len(df_source)} remaining")
-        except Exception as e:
-            print(f"film_meta filter — re-release skip ({e}); proceeding without re-release filter")
+    # ── Filter: re-releases + duplicate-booking variants (format/reschedule) ──
+    try:
+        n0 = len(df_source)
+        df_source, variant_map = filter_variants(df_source, film_lookup)
+        n_dropped = n0 - len(df_source)
+        if n_dropped:
+            print(f"film_meta filter — re-releases/variants: -{n_dropped} "
+                  f"({len(variant_map)} duplicate-booking, {n_dropped - len(variant_map)} keyword/year) "
+                  f"→ {len(df_source)} remaining")
+        if not variant_map.empty:
+            persist_variant_map(variant_map)
+            print(f"film_meta variants: {len(variant_map)} film_id(s) mapped onto a canonical "
+                  f"release this run → {FILM_ID_VARIANTS_PATH}")
+    except Exception as e:
+        print(f"film_meta filter — variant merge skipped ({e}); proceeding without it")
 
     FILM_META_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     if FILM_META_CHECKPOINT_PATH.exists():
@@ -707,6 +735,14 @@ async def enrich_film_meta(df_source: pd.DataFrame, film_lookup: pd.DataFrame | 
         )
     else:
         out = df_new
+
+    # Genre normalize/consolidate/rarity-filter + format-variant dedup on the
+    # WHOLE accumulated corpus (existing + this batch) — see cleanup_film_meta.py.
+    out, out_variant_map, out_stats = clean_film_meta_df(out)
+    if out_stats['n_genre_changed'] or out_stats['n_variants_dropped']:
+        print(f"film_meta cleanup — {out_stats['n_genre_changed']} rows genre-normalized, "
+              f"{out_stats['n_variants_dropped']} format-variant duplicates merged away")
+    persist_variant_map(out_variant_map)
 
     out.to_parquet(FILM_META_ENRICHED_PATH, engine='pyarrow', index=False)
     print(f"\nfilm_meta parquet → {FILM_META_ENRICHED_PATH}  ({len(out)} films)")

@@ -10,7 +10,7 @@ outer-join on film_id, no additional matching logic of its own.
 Read film_id_bridge.parquet, not the two matcher caches directly, when all
 you need is the film_id -> cs_id / gower_id crosswalk.
 
-Output: DATA_DIR/id_bridge/film_id_bridge.parquet
+Output: DATA_DIR/title_matching/id_bridge/film_id_bridge.parquet
 """
 
 import os
@@ -20,7 +20,7 @@ from config import DATA_DIR
 from comscore_matcher import ComscoreMatcher
 from gower_matcher import GowerMatcher
 
-ID_BRIDGE_DIR  = DATA_DIR / "id_bridge"
+ID_BRIDGE_DIR  = DATA_DIR / "title_matching" / "id_bridge"
 ID_BRIDGE_PATH = str(ID_BRIDGE_DIR / "film_id_bridge.parquet")
 
 _CS_COLS = ["film_id", "film", "cs_id", "cs_title", "match_confidence"]

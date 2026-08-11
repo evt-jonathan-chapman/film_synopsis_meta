@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from rapidfuzz import fuzz, process
-from .encode_helper import EncHelper  # vendored: upstream is `from encode_helper import EncHelper`
+from .encode_helper import EncHelper
 
 
 class ReReleaseFilter:

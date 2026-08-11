@@ -21,7 +21,6 @@ WHERE gw.ter_id = 'AU'
 AND gw.rel_date >= p.start_date 
 AND gw.title NOT ILIKE '%untitled%'
 AND gw.snapshot_date <= DATEADD(day, -1, gw.rel_date)
-AND gw.life_time_base > 1000000
 QUALIFY
 ROW_NUMBER() OVER (PARTITION BY gw.title ORDER BY gw.snapshot_date DESC) = 1
 OR ROW_NUMBER() OVER (PARTITION BY gw.title ORDER BY ABS(DATEDIFF(day, gw.snapshot_date, DATEADD(month, -1, gw.rel_date)))) = 1

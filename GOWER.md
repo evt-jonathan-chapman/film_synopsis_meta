@@ -1,6 +1,6 @@
 # Gower Matching
 
-Maps EVT `film_id` → Gower `gower_id` (`primary_title_no` on the Gower side)
+Maps EVT `film_id` → Gower `gower_id` (`prmry_title_no` on the Gower side)
 so Gower box-office estimates (`ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME`) can be
 joined onto EVT films — same goal as `COMSCORE.md`, different source.
 
@@ -41,7 +41,7 @@ Gower is a thinner data source than Comscore, so the matcher config in
   `upper_name` / `title_aka` / `us_title_name` / `short_name`; Gower only has
   `title`. `TITLE_COLS = ["title"]`.
 - **No stable numeric ID.** Comscore has `title_global_id`. Gower's closest
-  equivalent is `primary_title_no` — used as `ID_COL`, and exposed downstream
+  equivalent is `prmry_title_no` — used as `ID_COL`, and exposed downstream
   as the cache column `gower_id` (matching the requested
   `film_id` / `cs_id` / `gower_id` bridge schema).
 - **No alt-content flag.** Comscore drops concert/sports rows via
@@ -56,7 +56,7 @@ Gower is a thinner data source than Comscore, so the matcher config in
   these three so you can compare a title's box-office estimate at different
   points before/after release). `GowerMatcher._prep_source()` picks the
   `latest` snapshot (falling back to `1m_pre_release` then
-  `3m_pre_release`) for each `primary_title_no` before the shared
+  `3m_pre_release`) for each `prmry_title_no` before the shared
   dedup-by-`ID_COL` logic runs, so scoring only ever sees one row per title.
   The winning snapshot's `life_time_base` is carried into the cache as
   `gower_life_time_base` (via `GowerMatcher(carry_cols=["life_time_base"])`
@@ -77,6 +77,29 @@ Everything else — title normalisation, fuzzy scoring (rapidfuzz
 identical to Comscore, because it's literally the same shared code in
 `title_matcher.py::FuzzyTitleMatcher`. See `COMSCORE.md` for the full
 algorithm write-up; it applies here unchanged.
+
+---
+
+## The Gower extract is windowed — and so is the EVT work-set
+
+`sql/gower_export.sql` only pulls titles with `rel_date >= '2025-01-01'`
+(currently AU-only, no equivalent to Comscore's pre/post-COVID split).
+EVT films released earlier than that have no possible candidate row in
+Gower, so they'd always land as `unmatched` — pure noise in the review
+file. `rematch_gower.py::GOWER_MIN_REL_DATE` (currently `2025-01-01`,
+**must be kept in sync with the SQL's `params.start_date`**) filters the
+EVT work-set to the same window before matching, in
+`refresh_gower_match()`. On the full EVT catalogue (18,513 → 16,337 films
+after the usual festival/concert exclusions) this cuts the work-set to
+~1,562 films — the ones actually released in-window.
+
+This is a deliberate, narrower scope than Comscore's (which covers full
+history in two windows) — Gower matching is currently only needed for
+2025-onwards films for another project. To extend Gower matching back to
+full history later: widen `start_date` in `sql/gower_export.sql`, bump/remove
+`GOWER_MIN_REL_DATE` in `rematch_gower.py` to match, and re-run —
+already-matched films are skipped as usual, so this is incremental, not a
+full re-match.
 
 ---
 

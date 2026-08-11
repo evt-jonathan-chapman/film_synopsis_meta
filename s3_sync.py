@@ -1,0 +1,89 @@
+"""
+s3_sync.py
+----------
+Uploads the four LLM meta-output checkpoints (synopsis, film_meta, cast_meta,
+director_meta — enriched/extracted parquet + progress json) to S3, so a
+weekly run's results land somewhere other than this machine's local disk.
+
+Deliberately a separate, standalone step rather than tacked onto the end of
+refresh_synopsis/refresh_cast/refresh_directors/refresh_film_meta in
+refresh.py — the local parquet + progress json stay the fast, resumable
+checkpoint (see CLAUDE.md's "Non-obvious behaviours"); this just mirrors the
+already-written files to S3 afterwards. Run it whenever, independently of
+the extraction jobs, via `python s3_sync.py` or the `s3_sync_job` Dagster job
+in dagster_defs.py.
+
+Auth: boto3 session using the AWS profile in config.yaml's `s3.profile`
+(currently `stax-stax-au1-event`, a Stax SSO profile — credentials expire
+hourly, so run `stax2aws login` first if uploads fail with a credentials
+error). No automatic refresh; that's a manual step for now.
+"""
+
+from pathlib import Path
+
+import boto3
+from boto3.exceptions import S3UploadFailedError
+from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
+from config import DATA_DIR, S3_BUCKET, S3_PREFIX, S3_PROFILE
+
+# (local dir under DATA_DIR, s3 folder name, files to upload from that dir)
+SYNC_SPECS = [
+    ("meta_data/synopsis_v2",   "synopsis",      ["synopses_extracted.parquet", "synopsis_progress.json"]),
+    ("meta_data/film_meta",      "film_meta",     ["film_meta_enriched.parquet", "film_meta_progress.json"]),
+    ("meta_data/cast_meta",      "cast_meta",     ["cast_enriched.parquet", "cast_progress.json"]),
+    ("meta_data/director_meta",  "director_meta", ["director_enriched.parquet", "director_progress.json"]),
+]
+
+
+def sync_meta_outputs_to_s3() -> dict:
+    """Upload each file in SYNC_SPECS to s3://{S3_BUCKET}/{S3_PREFIX}/{s3_folder}/.
+
+    Returns a summary dict (uploaded / skipped / failed file lists) — printed
+    and also handed back so the Dagster asset can surface it in the run log.
+    """
+    if not S3_BUCKET:
+        raise RuntimeError("config.yaml is missing an `s3.bucket` value")
+
+    session = boto3.Session(profile_name=S3_PROFILE)
+    s3 = session.client("s3")
+
+    uploaded, skipped, failed = [], [], []
+
+    for local_dir, s3_folder, filenames in SYNC_SPECS:
+        for filename in filenames:
+            local_path = DATA_DIR / local_dir / filename
+            if not local_path.exists():
+                print(f"  skip (not found): {local_path}")
+                skipped.append(str(local_path))
+                continue
+
+            key = f"{S3_PREFIX}/{s3_folder}/{filename}"
+            try:
+                s3.upload_file(str(local_path), S3_BUCKET, key)
+                size_mb = local_path.stat().st_size / 1_000_000
+                print(f"  uploaded: {local_path} -> s3://{S3_BUCKET}/{key}  ({size_mb:.1f} MB)")
+                uploaded.append(key)
+            except NoCredentialsError:
+                raise RuntimeError(
+                    f"No valid AWS credentials for profile '{S3_PROFILE}'. "
+                    "Run `stax2aws login` and retry."
+                )
+            except (ClientError, BotoCoreError, S3UploadFailedError) as e:
+                if "ExpiredToken" in str(e) or "token has expired" in str(e):
+                    raise RuntimeError(
+                        f"AWS session for profile '{S3_PROFILE}' has expired. "
+                        "Run `stax2aws login` and retry."
+                    )
+                print(f"  FAILED: {local_path} -> s3://{S3_BUCKET}/{key}  ({e})")
+                failed.append(key)
+
+    summary = {"uploaded": uploaded, "skipped": skipped, "failed": failed}
+    print(f"\ns3_sync → {len(uploaded)} uploaded, {len(skipped)} skipped, {len(failed)} failed")
+    if failed:
+        raise RuntimeError(f"s3_sync: {len(failed)} file(s) failed to upload: {failed}")
+    return summary
+
+
+if __name__ == "__main__":
+    sync_meta_outputs_to_s3()

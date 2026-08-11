@@ -40,7 +40,7 @@ Pulls from `IBOE_TITLES` joined to `IBOE_FLASH_GROSS_STATE_TITLE` (week 1 rows o
 
 **Filters applied:**
 - `CNTRY_ID = 'AU'` — AU only
-- Release date windows: **2018-01-01 → 2020-02-01** (pre-COVID) **OR 2021-12-01 → ~now+28 days** (post-COVID). Films outside these windows won't be in the extract — they'll appear unmatched even if the title matches perfectly.
+- Release date: **`RELEASE_DATE >= 2018-01-01`**, no upper bound. (The `params` CTE also defines `pre_covid_start`/`pre_covid_end`/`post_covid_start`, but nothing in the query selects on them — they're vestigial, not an active pre/post-COVID split. Don't rely on them.) Films released before 2018 won't be in the extract — they'll appear unmatched even if the title matches perfectly.
 
 **Title columns returned** (all five are scored during matching):
 

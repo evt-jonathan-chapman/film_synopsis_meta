@@ -58,18 +58,22 @@ Leave whichever you need running. All commands below are launched from the relev
 | `cast` | actor profiles (mini + web_search) | <$10, minutes | **~$100, ~5–6 hr** |
 | `directors` | director profiles (mini + web_search) | <$1, seconds | **~$50, ~1.5 hr** (code-printed; real bill lower) |
 | `film_meta` | studios / billing / budget / IP (mini + web_search) | ~$100–150, ~3 hrs | same |
+| `s3_sync` | uploads the four checkpoints (parquet + progress json) to S3 | seconds, $0 | same |
 
 > Printed `Run total: $X` for web_search paths uses a hardcoded $0.025/search-call rate in `film_meta_extractor.py:43` that's now stale — real dashboard bill is meaningfully lower. Override via `WEB_SEARCH_COST_USD` env if you care about accuracy.
 
-**Three jobs:**
+`s3_sync` declares `deps=[synopsis, cast, directors, film_meta]` (Dagster-tracked, same code location) but doesn't consume their in-memory outputs — it just re-reads the parquet/progress-json files each one already wrote to `DATA_DIR`, via `s3_sync.py::sync_meta_outputs_to_s3`. See that module's docstring and `CLAUDE.md` for the S3 target and auth (a Stax SSO profile whose credentials expire hourly — run `stax2aws login` before triggering this job, there's no automatic refresh).
+
+**Four jobs:**
 
 | Job | Selection | Schedule |
 |---|---|---|
 | `nightly_job` | `films_source` + `synopsis` + `cast` + `directors` | 02:00 daily (`nightly_schedule`) |
 | `film_meta_job` | `films_source` + `film_meta` | 03:00 Sundays (`film_meta_schedule`) |
+| `s3_sync_job` | `s3_sync` | unscheduled — ad-hoc only (needs a fresh manual AWS login first) |
 | `full_refresh_job` | everything in this code location (`*`) | unscheduled — ad-hoc only |
 
-`film_meta` is split off because it's the $100+/run path; everything else fits in a cheap nightly.
+`film_meta` is split off because it's the $100+/run path; everything else fits in a cheap nightly. `s3_sync` is split off from both because it needs its own auth step that the extraction jobs don't — trigger it manually once a week's run is done and your AWS session is fresh.
 
 ### `dagster_matching_defs.py` (Comscore/Gower matching)
 
@@ -98,6 +102,7 @@ Leave whichever you need running. All commands below are launched from the relev
 - **All four paths (full refresh):** Jobs → `full_refresh_job` → *Launch Run*.
 - **Cheap nightly paths only (synopsis + cast + directors):** Jobs → `nightly_job` → *Launch Run*.
 - **film_meta only (the $100+ path):** Jobs → `film_meta_job` → *Launch Run*.
+- **Sync the four meta checkpoints to S3:** run `stax2aws login` first, then Jobs → `s3_sync_job` → *Launch Run*.
 - **A single asset (e.g. just `cast`):** Assets → click the asset → *Materialize selected*. **`films_source` must already be materialised** in this Dagster home — otherwise the downstream will fail with `FileNotFoundError: …/storage/films_source`. If it's missing, materialise `films_source` once first, or cmd-click both and materialise together.
 - **Re-run just the downstreams without re-pulling Snowflake:** Assets → select the downstream assets → *Materialize selected*. Dagster reuses the existing `films_source` materialisation.
 

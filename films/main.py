@@ -1,8 +1,7 @@
-from typing import Any
 import pandas as pd
 
-
-from tools.connections import SnowflakeDB
+from base_snowflake import SnowFlakeBase
+from config import SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY
 from films import sql
 from films.config import FILM_PARQUET_PATH
 
@@ -26,28 +25,15 @@ def get_films_sources(persisted: bool = True) -> pd.DataFrame:
     except FileNotFoundError:
         pass
 
-    snow_db = SnowflakeDB()
-
-    df_films = snow_db.sync_select(sql.SQL_FILM_DETAILS)
+    sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
+    sb.create_snowflake_connection(SF_RSA_KEY)
+    df_films = pd.read_sql(sql.SQL_FILM_DETAILS, sb.engine)
+    df_films.columns = df_films.columns.str.lower()
 
     # df_films['primary_genres'] = df_films[['genre_1', 'genre_2', 'genre_3']].apply(lambda x: '|'.join(x.dropna()), axis=1).str.lower()
     df_films.to_parquet(FILM_PARQUET_PATH)
 
     return _deduplicate_alt_synopsis(df_films)
-
-
-def get_films_by_release(*release_dates: str) -> dict[str, list[dict[str, Any]]]:
-    snow_db = SnowflakeDB()
-    result: dict[str, list[dict[str, Any]]] = {}
-
-    for r in release_dates:
-        df = snow_db.sync_select(sql.SQL_FILMS_BY_RELEASE, params={'release_date': r})
-        if df.empty:
-            continue
-
-        result[r] = df.to_dict('records')
-
-    return result
 
 
 if __name__ == '__main__':

@@ -5,8 +5,11 @@ Match EVT films → Gower (ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME) rows.
 
 1. Pulls the Gower extract from Snowflake (sql/gower_export.sql).
 2. Builds the EVT films work-set via rematch_comscore.py::load_evt_films —
-   same loader Comscore uses, so both sources score against an identical
-   EVT film catalogue (concert films + festival distributors excluded).
+   same loader Comscore uses (concert films + festival distributors
+   excluded) — then further restricts it to GOWER_MIN_REL_DATE, matching
+   the SQL extract's own release-date window. Films released before that
+   are guaranteed unmatched (no candidate row exists for them), so
+   excluding them upfront keeps the review file focused and useful.
 3. Runs GowerMatcher.build_mapping — writes:
      gower_cache.parquet           keyed on EVT film_id
      gower_review_needed.parquet   borderline+unmatched for triage
@@ -33,8 +36,15 @@ from rematch_comscore import load_evt_films
 LIMIT_FILMS: int | None = None
 RANDOM_SEED = 42
 
+# Must match sql/gower_export.sql's `params.start_date` CTE value — the SQL
+# only pulls Gower titles released on/after this date, so EVT films released
+# earlier can never match (there's no candidate row for them). Filtering the
+# EVT work-set to the same window keeps the review file focused on films
+# that could plausibly match, instead of ~10k+ guaranteed-unmatched rows.
+GOWER_MIN_REL_DATE = pd.Timestamp("2025-01-01", tz="UTC")
+
 _GW_COLS = [
-    "primary_title_no", "title", "rel_date", "snapshot_date",
+    "prmry_title_no", "title", "rel_date", "snapshot_date",
     "snapshot_type", "life_time_base",
 ]
 
@@ -47,7 +57,10 @@ def pull_gower() -> pd.DataFrame:
     gw_raw = sb.return_query_output(sql)
     missing = [c for c in _GW_COLS if c not in gw_raw.columns]
     if missing:
-        raise ValueError(f"Gower extract missing expected columns: {missing}")
+        raise ValueError(
+            f"Gower extract missing expected columns: {missing}. "
+            f"Actual columns returned: {gw_raw.columns.tolist()}"
+        )
     gw = gw_raw[_GW_COLS].drop_duplicates().reset_index(drop=True)
     gw['rel_date'] = pd.to_datetime(gw['rel_date'], errors='coerce')
     print(f"Gower: {len(gw_raw):,} raw rows → {len(gw):,} unique rows, "
@@ -61,6 +74,11 @@ def refresh_gower_match(limit: int | None = None, random_seed: int = 42) -> dict
     """Pull Gower, load EVT films, run the matcher. Returns summary dict for Dagster."""
     gw_df    = pull_gower()
     films_df = load_evt_films()
+
+    n_before = len(films_df)
+    films_df = films_df[films_df["rel_at"] >= GOWER_MIN_REL_DATE].reset_index(drop=True)
+    print(f"Restricted to rel_at >= {GOWER_MIN_REL_DATE.date()} (matches sql/gower_export.sql's "
+          f"window): {n_before:,} → {len(films_df):,} films")
 
     if limit is not None:
         films_df = films_df.sample(min(limit, len(films_df)),

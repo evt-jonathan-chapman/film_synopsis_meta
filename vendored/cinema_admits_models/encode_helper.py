@@ -584,3 +584,101 @@ class EncHelper:
                 current = list(film_df.at[idx, "genres"])
                 film_df.at[idx, "genres"] = list(set(current + new_genres))
         return film_df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Format / event / festival variant stripping + all_admits consolidation.
+#
+# Vista assigns a separate film_id to each format (3D), event (sing-along,
+# bonus content, Q&A), and festival programme (TFF/FFF/MIFF/CFF) of the same
+# theatrical release. Without consolidation, those variants count as multiple
+# "prior films" in distr_*/prod_*/cast_* aggregations, inflating num_prior_films
+# and dragging avg/median/p75 down because stub film_ids carry partial admits.
+#
+# Language-version variants (Hindi/Tamil/Telugu/Malayalam/Kannada/Japanese/
+# English) are intentionally NOT stripped — they're distinct theatrical
+# products with their own audience profiles.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VARIANT_STRIP = [
+    # Format variants
+    (re.compile(r"^3D[\s\-]+",                           re.I), ""),
+    (re.compile(r"^GC\s+",                               re.I), ""),
+    (re.compile(r"\s*[-–]\s*3D$",                        re.I), ""),
+    (re.compile(r"\s*[-–]\s*IMAX(\s+3D)?$",              re.I), ""),
+    (re.compile(r"\s+\(3D\)$",                           re.I), ""),
+    (re.compile(r"\s+\(IMAX\)$",                         re.I), ""),
+    (re.compile(r"\s*[-–]\s*SCREEN\s*X\b.*$",            re.I), ""),
+    # Special-screening / event variants
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+SCREENING[S]?$",   re.I), ""),
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+EVENT$",           re.I), ""),
+    (re.compile(r"\s*[-–]\s*EVENT\s+CINEMA$",            re.I), ""),
+    (re.compile(r"\s*[-–]\s*BONUS\s+CONTENT$",           re.I), ""),
+    (re.compile(r"\s*[-–]\s*SING[\s\-]?ALONG$",          re.I), ""),
+    (re.compile(r"\s*[-–]\s*SPECIAL\s+Q\s+AND\s+A.*$",   re.I), ""),
+    (re.compile(r"\s*[-–]\s*BLOCK\s+PARTY\s+EDITION!?$", re.I), ""),
+    (re.compile(r":\s*THE\s+VALENTINE\s+ENCORE$",        re.I), ""),
+    # Festival / distributor programme prefixes
+    (re.compile(r"^(?:TFF|FFF|MIFF|CFF|MF)\s*[-–]?\s+",  re.I), ""),
+]
+
+
+def strip_format_variant(title) -> str:
+    """Return base title with format / event / festival qualifiers removed."""
+    t = str(title).upper().strip()
+    for pat, repl in _VARIANT_STRIP:
+        t = pat.sub(repl, t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def consolidate_all_admits(all_admits: pd.DataFrame) -> pd.DataFrame:
+    """Rewrite film_id in all_admits so each logical film (= unique
+    (base_title, rel_at) after stripping format / event / festival qualifiers)
+    has one keeper film_id. Variant rows' week_admits are credited to the
+    keeper film_id rather than counted as a separate prior film by downstream
+    groupby('film_id') aggregations.
+
+    Keeper selection:
+      1. Prefer a film_id that has at least one row whose `film` string already
+         equals its base_title (i.e. a "standard" non-variant row exists).
+      2. Tiebreak by highest total week_admits.
+
+    Returns a new DataFrame; the input is not mutated.
+    """
+    df = all_admits.copy()
+    df["base_title"]  = df["film"].apply(strip_format_variant)
+    df["_film_upper"] = df["film"].astype(str).str.upper().str.strip()
+    df["_is_variant"] = df["base_title"] != df["_film_upper"]
+
+    film_summary = (
+        df.groupby("film_id")
+          .agg(total_admits=("week_admits", "sum"),
+               has_standard=("_is_variant", lambda s: (~s).any()))
+          .reset_index()
+    )
+    keys = (
+        df[["base_title", "rel_at", "film_id"]]
+        .drop_duplicates()
+        .merge(film_summary, on="film_id", how="left")
+        .sort_values(
+            ["base_title", "rel_at", "has_standard", "total_admits"],
+            ascending=[True, True, False, False],
+        )
+    )
+    keepers = (
+        keys.drop_duplicates(["base_title", "rel_at"], keep="first")
+            [["base_title", "rel_at", "film_id"]]
+            .rename(columns={"film_id": "keeper_film_id"})
+    )
+
+    n_before = df["film_id"].nunique()
+    df = df.merge(keepers, on=["base_title", "rel_at"], how="left")
+    n_reassigned = int((df["film_id"] != df["keeper_film_id"]).sum())
+    df["film_id"] = df["keeper_film_id"]
+    df = df.drop(columns=["base_title", "_film_upper", "_is_variant", "keeper_film_id"])
+    n_after = df["film_id"].nunique()
+    print(
+        f"  consolidate_all_admits: reassigned {n_reassigned:,} rows; "
+        f"film_id universe {n_before:,} → {n_after:,}"
+    )
+    return df
