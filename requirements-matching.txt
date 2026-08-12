@@ -26,3 +26,7 @@ requests
 
 # Fuzzy title matching
 rapidfuzz
+
+# S3 (rematch_comscore.py's concert-film filter now reads film_meta_enriched.parquet
+# from S3 via s3_checkpoint.py, since refresh.py no longer writes it locally)
+boto3

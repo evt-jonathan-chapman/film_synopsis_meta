@@ -11,16 +11,22 @@ the separate `dagster_matching_defs.py` code location instead of here, so
 `litellm`/`openai` dependencies. Run both processes side by side if you want
 both sets of assets available (see DAGSTER.md).
 
-A fifth asset, `s3_sync`, uploads the four checkpoints (parquet + progress
-json) to S3 afterwards — kept as its own job (`s3_sync_job`) rather than
-appended to the extraction jobs, since it needs its own AWS auth step (see
-s3_sync.py) that the extraction assets don't. Trigger it manually once the
-week's run is done and your AWS session is fresh.
+A fifth asset, `merged_film_data`, outer-joins `synopsis` + `film_meta` into
+one comprehensive per-film parquet (see film_data_merge.py) — a real
+Dagster-tracked dependency since both inputs live in this same code
+location. Its own job (`merged_film_data_job`) since it only makes sense to
+run after a `film_meta_job` materialisation, not on the cheap nightly cadence.
+
+There is deliberately no `s3_sync` asset here anymore. All five assets above
+now read/write S3 directly via s3_checkpoint.py — no local disk involved, no
+separate sync step, no dependency on an interactively-refreshed Stax SSO
+session (see s3_checkpoint.py's module docstring and CLAUDE.md). s3_sync.py
+still exists but is now scoped to main.py's local-disk ad-hoc runs only.
 
 Schedules:
   - nightly_schedule       — synopsis + cast + directors (cheap, ~$5/night)
   - film_meta_schedule     — film_meta only, weekly (expensive, ~$100/run)
-  - s3_sync_job            — unscheduled, ad-hoc only (see s3_sync.py)
+  - merged_film_data_job   — unscheduled, ad-hoc only, run after film_meta_job
 """
 
 from dagster import (
@@ -35,7 +41,7 @@ from refresh import (
     refresh_directors,
     refresh_film_meta,
 )
-from s3_sync import sync_meta_outputs_to_s3
+from film_data_merge import build_merged_film_data
 
 
 @asset
@@ -71,15 +77,13 @@ def film_meta(films_source: pd.DataFrame) -> dict:
     return refresh_film_meta(films_source)
 
 
-@asset(deps=[synopsis, cast, directors, film_meta])
-def s3_sync() -> dict:
-    """Uploads the four meta checkpoints (parquet + progress json) to S3.
-
-    Requires a fresh AWS session for the profile in config.yaml's `s3.profile`
-    (Stax SSO credentials expire hourly) — run `stax2aws login` first if this
-    fails with a credentials error. See s3_sync.py.
+@asset(deps=[synopsis, film_meta])
+def merged_film_data() -> dict:
+    """Outer-joins synopsis + film_meta into one comprehensive per-film parquet
+    (biography/documentary genre carve-out applied — see film_data_merge.py).
+    Stateless: re-derived fresh from the two source parquets on every run.
     """
-    return sync_meta_outputs_to_s3()
+    return build_merged_film_data()
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -94,9 +98,9 @@ film_meta_job = define_asset_job(
     selection=AssetSelection.assets(films_source, film_meta),
 )
 
-s3_sync_job = define_asset_job(
-    "s3_sync_job",
-    selection=AssetSelection.assets(s3_sync),
+merged_film_data_job = define_asset_job(
+    "merged_film_data_job",
+    selection=AssetSelection.assets(merged_film_data),
 )
 
 full_refresh_job = define_asset_job("full_refresh_job", selection="*")
@@ -116,7 +120,7 @@ film_meta_schedule = ScheduleDefinition(
 
 
 defs = Definitions(
-    assets=[films_source, synopsis, cast, directors, film_meta, s3_sync],
-    jobs=[nightly_job, film_meta_job, s3_sync_job, full_refresh_job],
+    assets=[films_source, synopsis, cast, directors, film_meta, merged_film_data],
+    jobs=[nightly_job, film_meta_job, merged_film_data_job, full_refresh_job],
     schedules=[nightly_schedule, film_meta_schedule],
 )

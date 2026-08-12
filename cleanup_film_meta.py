@@ -343,7 +343,18 @@ def clean_film_meta_df(df: pd.DataFrame) -> tuple:
     # MIN_GENRE_FILM_COUNT) and take this signal with it. Useful for
     # excluding concert screenings (not films) downstream regardless of
     # whether "Concert" survives as a genre label.
-    df['is_concert'] = df['genres'].apply(lambda g: 'Concert' in g)
+    #
+    # OR'd with any pre-existing is_concert value, not overwritten outright —
+    # this function runs on the WHOLE accumulated corpus every time (existing
+    # + newly extracted rows), so a row that already went through a prior
+    # rarity-filter pass has "Concert" stripped from its genres already, and
+    # a fresh `'Concert' in g` check would silently flip a correctly-True
+    # flag back to False on every subsequent run. Once True, always True.
+    freshly_flagged = df['genres'].apply(lambda g: 'Concert' in g)
+    if 'is_concert' in df.columns:
+        df['is_concert'] = freshly_flagged | df['is_concert'].fillna(False)
+    else:
+        df['is_concert'] = freshly_flagged
 
     counts = compute_genre_counts(df['genres'])
     rare_labels = sorted(counts[counts < MIN_GENRE_FILM_COUNT].index)

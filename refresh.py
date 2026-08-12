@@ -47,6 +47,7 @@ from config import (
     DIRECTOR_ENRICHED_PATH, FILM_META_ENRICHED_PATH, FILM_ID_VARIANTS_PATH,
     SF_WAREHOUSE, SF_DATABASE, SF_SCHEMA, SF_RSA_KEY,
 )
+import s3_checkpoint
 from cleanup_film_meta import clean_film_meta_df
 from extractor import LlmJsonExtractor
 from film_meta_extractor import FilmMetaExtractor, ActorMetaExtractor, DirectorMetaExtractor
@@ -83,6 +84,27 @@ META_BATCH_PAUSE_SECS = 3   # pause between batches to let TPM window reset
 # dropping below 3 known cast members.
 MIN_KNOWN_CAST_FOR_RETRY = 3
 
+# Lookback window for load_films_from_snowflake()'s live catalogue pull.
+# SQL_FILM_DETAILS itself has no date filter (see films/sql.py) — this is a
+# Python-side restriction, same pattern as rematch_gower.py::GOWER_MIN_REL_DATE.
+# Added after a live run surfaced 15,263 total films vs. the ~5,032 the old
+# parquet-snapshot-based work-set ever covered — the extra ~10,231 turned out
+# to be mostly genuine 2008-2017 releases the old system never captured.
+# 2018-01-01 is not a guess: it's the box office model's actual live training
+# window start — cinema_admits_models/helper_fucntions.py::
+# return_train_calib_test_dates(train_start=datetime(2018, 1, 1), ...) is the
+# real default driving db_merge_20260420.sql/bo_pred_build.sql's date params.
+# Films released before this are outside what the model trains on at all, so
+# there's no point paying web_search prices to extract their metadata. Set to
+# None to disable (pull the full historical catalogue back to 1935).
+WORK_SET_MIN_REL_DATE: pd.Timestamp | None = pd.Timestamp("2018-01-01", tz="UTC")
+
+# Local paths — no longer written by refresh.py itself (see s3_checkpoint.py;
+# all four extraction paths now read/write S3 directly, not local disk). Kept
+# defined and importable for main.py's own local-disk checkpoint logic and
+# diagnostics/post_refresh_check.py's local checks, which are unaffected by
+# this module's own I/O. The one exception is SYNOPSIS_CHECKPOINT_PATH, which
+# _sync_synopsis_checkpoint still writes locally on purpose — see its docstring.
 SYNOPSIS_CHECKPOINT_PATH  = DATA_DIR / 'meta_data' / 'synopsis_v2'   / 'synopsis_progress.json'
 FILM_META_CHECKPOINT_PATH = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_progress.json'
 FILM_META_ERRORS_PATH     = DATA_DIR / 'meta_data' / 'film_meta'     / 'film_meta_errors.json'
@@ -90,6 +112,19 @@ CAST_CHECKPOINT_PATH      = DATA_DIR / 'meta_data' / 'cast_meta'     / 'cast_pro
 CAST_ERRORS_PATH          = DATA_DIR / 'meta_data' / 'cast_meta'     / 'cast_errors.json'
 DIRECTOR_CHECKPOINT_PATH  = DATA_DIR / 'meta_data' / 'director_meta' / 'director_progress.json'
 DIRECTOR_ERRORS_PATH      = DATA_DIR / 'meta_data' / 'director_meta' / 'director_errors.json'
+
+# S3 checkpoint names/filenames — passed to s3_checkpoint.py's load_checkpoint/
+# append_checkpoint/read_parquet/write_parquet. Names match s3_sync.py's old
+# SYNC_SPECS folder naming (synopsis_v2 locally is "synopsis" on the S3 side).
+SYNOPSIS_S3_NAME    = 'synopsis'
+CAST_S3_NAME        = 'cast_meta'
+DIRECTOR_S3_NAME    = 'director_meta'
+FILM_META_S3_NAME   = 'film_meta'
+SYNOPSIS_FILENAME    = 'synopses_extracted.parquet'
+CAST_FILENAME        = 'cast_enriched.parquet'
+DIRECTOR_FILENAME    = 'director_enriched.parquet'
+FILM_META_FILENAME   = 'film_meta_enriched.parquet'
+FILM_ID_VARIANTS_FILENAME = 'film_id_variants.parquet'
 
 # Distributors with no extractable cast/budget/studios metadata.
 # Mirrors main.py::FILM_META_SKIP_DISTRIBUTORS.
@@ -107,7 +142,66 @@ FILM_META_SKIP_DISTRIBUTORS = {
     "ZZ Queensland Cricket Association Ltd", "ZZ ESPN Australia Pty Ltd",
     "AU IMAX THEATRES INTL", "ZZ Nickelodeon Australia Management",
     "ZZ CRUNCHYROLL PTY LTD", "ZZ SBS-ALTERNATE CONTENT",
+    # NZ festival equivalents — found missing 2026-08-12 while investigating why
+    # the live-Snowflake work-set's "new films" backlog was so large: these
+    # accounted for ~760 of it on their own (synopsis diff wasn't even applying
+    # this list at all until the same investigation — see _diff_synopsis_films).
+    "NZ Italian Film Festival", "NZ French Film Festival",
+    "NZ NEW ZEALAND INT FILM FESTIVAL", "ZZ International Film Festival NZ",
+    "NZ RESENE ARCHITECTURE AND DESIGN FF", "NZ British Film Festival NZ",
+    "ZZ SHOW ME SHORTS FILM FESTIVAL", "ZZ Veterans Film Festival",
+    "ZZ GREEK FESTIVAL OF SYDNEY",
 }
+
+# Placeholder/no-content synopsis values — built from a value_counts scan of
+# the live work-set (2026-08-12), not guessed. "plot unknown" alone accounts
+# for ~90 films; language names leaking into the synopsis field instead of
+# describing plot is the same bug pattern cleanup_film_meta.py documents for
+# the genre field. A blanket length cutoff would ALSO wrongly drop legitimate
+# terse synopses ("Remake of Train to Busan." is 25 chars and real) — this is
+# a denylist of specific known-junk values instead, not a length threshold.
+_SYNOPSIS_PLACEHOLDER_VALUES = {
+    'testing code', 'tba', 'n/a', 'none', 'unknown', 'coming soon',
+    'no synopsis available', 'synopsis not available', 'gaming booking',
+    'telugu', 'tamil', 'hindi', 'hindi language', 'telugu version',
+    'kannada', 'malayalam', 'punjabi', 'marathi', 'bengali', 'urdu',
+    'japanese', 'korean', 'mandarin', 'cantonese',
+}
+_BRACKETED_YEAR_RE = re.compile(r'^\[\d{4}\]$')
+
+
+def _is_placeholder_text(series: pd.Series) -> pd.Series:
+    norm = series.fillna('').astype(str).str.strip().str.lower().str.strip('*').str.strip()
+    return (
+        (norm == '')
+        | norm.str.contains('plot unknown', regex=False)
+        | norm.str.contains('plot is unknown', regex=False)
+        | norm.isin(_SYNOPSIS_PLACEHOLDER_VALUES)
+        | norm.str.match(_BRACKETED_YEAR_RE)
+    )
+
+
+def _drop_no_usable_synopsis(df: pd.DataFrame) -> pd.DataFrame:
+    """Drops films where NEITHER synopsis nor alt_synopsis has usable content
+    — alt_synopsis (Vista's own booking description) often has real text even
+    when the primary (IHUB) synopsis is a "Plot unknown" placeholder (true for
+    about half of the "plot unknown" rows observed 2026-08-12), so a film is
+    only dropped if both are placeholder/empty, not just the primary one."""
+    if 'synopsis' not in df.columns:
+        return df
+    title_echo = (
+        df['synopsis'].fillna('').astype(str).str.strip().str.lower()
+        == df.get('film_title', pd.Series('', index=df.index)).fillna('').astype(str).str.strip().str.lower()
+    )
+    syn_bad = _is_placeholder_text(df['synopsis']) | title_echo
+    alt_bad = _is_placeholder_text(df['alt_synopsis']) if 'alt_synopsis' in df.columns else pd.Series(True, index=df.index)
+    no_usable = syn_bad & alt_bad
+
+    n0 = len(df)
+    df = df[~no_usable]
+    if n0 - len(df):
+        log.info(f"synopsis placeholder/no-content filtered: -{n0 - len(df)} → {len(df)}")
+    return df
 
 _AND_PREFIX = re.compile(r'^AND\s+', re.IGNORECASE)
 
@@ -128,72 +222,127 @@ def _clean_actor(raw: str) -> str:
 
 # ── Source loaders ────────────────────────────────────────────────────────────
 
+def _snowflake_array_to_pipe_string(val):
+    """SQL_FILM_DETAILS' ACTOR_LIST/DIRECTOR_LIST come back as Snowflake
+    ARRAYs (built via STRTOK_TO_ARRAY) — downstream code (_clean_actor,
+    _diff_directors, etc.) expects pipe-delimited strings, matching the
+    format the old parquet snapshots used. Handles a few possible wire
+    formats defensively since this hasn't been exercised against a live
+    Snowflake connection: a real list/tuple/ndarray, a JSON-encoded string
+    (some connector versions serialize ARRAY columns this way), or already
+    a plain string/None."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        stripped = val.strip()
+        if stripped.startswith('['):
+            try:
+                items = json.loads(stripped)
+                return '|'.join(str(v) for v in items) if items else None
+            except (ValueError, TypeError):
+                return val
+        return val or None
+    if isinstance(val, (list, tuple, np.ndarray)):
+        items = list(val)
+        return '|'.join(str(v) for v in items) if items else None
+    return val
+
+
 def load_films_from_snowflake() -> pd.DataFrame | None:
     """Returns the curated film work-set used by all four extraction paths.
 
-    Mirrors main.py's loader: reads the train/test/prediction parquet snapshots
-    (the model-relevant subset of EVT's catalogue — ~4–5k films), drops rows
-    without a usable synopsis, then joins authoritative titles + the
-    distributor column from Snowflake.
+    Pulls directly from Snowflake via films/sql.py::SQL_FILM_DETAILS — that
+    query has no lookback restriction of its own (its only filter is
+    `FILM_NAT_OPEN_DATE IS NOT NULL`, going back to 1935 in practice), so the
+    raw pull is much BIGGER than the old snapshot-glob approach ever
+    accumulated, not just "at least as much" as originally assumed here —
+    confirmed on this function's first live run: 18,913 raw films vs. the
+    ~5,032 the old work-set had ever covered. WORK_SET_MIN_REL_DATE (module
+    level, above) restricts it back down to a sane window — see that
+    constant's comment for why 2018-01-01 isn't an arbitrary guess.
 
-    Function name kept for backwards-compat with dagster_defs.py — note the
-    primary source is now the parquets, not Snowflake.
+    Verified against a live Snowflake connection as of 2026-08-12 — the
+    array-to-string handling for ACTOR_LIST/DIRECTOR_LIST worked as expected.
 
-    Returns None only if the parquet snapshots are unreadable.
+    Returns None if Snowflake is unreachable — there is no local parquet
+    fallback (that's main.py's job, via its own separate loader).
     """
-    import glob
-
-    raw_paths  = sorted(glob.glob(str(DATA_DIR / 'raw_from_snowflake'        / '*' / 'train' / 'train_raw_ds.parquet')))
-    raw_paths += sorted(glob.glob(str(DATA_DIR / 'raw_from_snowflake'        / '*' / 'test'  / 'test_raw_ds.parquet')))
-    pred_paths = sorted(glob.glob(str(DATA_DIR / 'prediction_from_snowflake' / '*' / 'prediction_raw.parquet')))
-    all_paths  = raw_paths + pred_paths
-
-    if not all_paths:
-        log.warning(f"No parquet snapshots found under {DATA_DIR}/raw_from_snowflake or /prediction_from_snowflake")
-        return None
-
-    parts = []
-    for p in all_paths:
-        part = pd.read_parquet(p, columns=['film_id', 'synopsis', 'actor_list',
-                                           'rel_at', 'director', 'dstbtr'])
-        part['rel_at'] = pd.to_datetime(part['rel_at'], utc=True, errors='coerce')
-        parts.append(part)
-        log.info(f"  {Path(p).relative_to(DATA_DIR)}: {part['film_id'].nunique()} films")
-
-    df = (pd.concat(parts, ignore_index=True)
-            .drop_duplicates('film_id')
-            .assign(film_id=lambda d: d['film_id'].astype(int)))
-    log.info(f"Unique films from parquets: {len(df)}")
-
-    df = df[df['synopsis'].notna() & (df['synopsis'].astype(str).str.len() >= 5)].copy()
-    log.info(f"Films with synopsis: {len(df)}")
-
     try:
         from base_snowflake import SnowFlakeBase
         sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
         sb.create_snowflake_connection(SF_RSA_KEY)
-        snow = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)[
-            ['film_id', 'film_title', 'ihub_synopsis', 'vista_synopsis']
-        ]
-        snow['film_id'] = snow['film_id'].astype(int)
-        df = df.merge(snow, on='film_id', how='left')
-
-        # IHUB_SYNOPSIS is primary (matches the pre-split COALESCE(m.SYNOPSIS,
-        # f.FILM_DESC) behaviour); VISTA_SYNOPSIS becomes alt_synopsis whenever
-        # it actually differs, so both sources feed the extractor and both get
-        # diffed for changes on the next run (see _diff_synopsis_films).
-        ihub  = df['ihub_synopsis'].fillna('').str.strip()
-        vista = df['vista_synopsis'].fillna('').str.strip()
-        df['synopsis'] = df['ihub_synopsis'].where(ihub != '', df['vista_synopsis'])
-        df['alt_synopsis'] = df['vista_synopsis'].where(vista != ihub, None)
-        df = df.drop(columns=['ihub_synopsis', 'vista_synopsis'])
-        log.info("Film titles + synopsis (IHUB/VISTA) joined from Snowflake")
+        df = pd.read_sql(films_sql.SQL_FILM_DETAILS, sb.engine)
     except Exception as e:
-        log.warning(f"Snowflake unavailable ({e}) — using film_id as title fallback, "
-                     f"keeping parquet-sourced synopsis (no alt_synopsis)")
-        df['film_title'] = df['film_id'].astype(str)
+        log.error(f"Snowflake unavailable ({e}) — cannot load film work-set")
+        return None
+
+    df['actor_list'] = df['actor_list'].apply(_snowflake_array_to_pipe_string)
+    df['director'] = df['director_list'].apply(_snowflake_array_to_pipe_string)
+    df['dstbtr'] = df['distributor_name']
+    df['rel_at'] = pd.to_datetime(
+        df['film_nat_open_date'].fillna(df['film_open_date']), utc=True, errors='coerce',
+    )
+
+    if WORK_SET_MIN_REL_DATE is not None:
+        n_before = len(df)
+        df = df[df['rel_at'] >= WORK_SET_MIN_REL_DATE].reset_index(drop=True)
+        log.info(f"Restricted to rel_at >= {WORK_SET_MIN_REL_DATE.date()}: {n_before:,} → {len(df):,} films")
+
+    # IHUB_SYNOPSIS is primary (matches the pre-split COALESCE(m.SYNOPSIS,
+    # f.FILM_DESC) behaviour); VISTA_SYNOPSIS becomes alt_synopsis only when
+    # IHUB was actually present AND differs from it — so both sources feed
+    # the extractor as independent cross-checks (diffed for changes on the
+    # next run — see _diff_synopsis_films). When IHUB is empty and VISTA is
+    # used as the synopsis fallback instead, alt_synopsis stays empty rather
+    # than duplicating the same text into both fields.
+    ihub  = df['ihub_synopsis'].fillna('').str.strip()
+    vista = df['vista_synopsis'].fillna('').str.strip()
+    df['synopsis'] = df['ihub_synopsis'].where(ihub != '', df['vista_synopsis'])
+    df['alt_synopsis'] = df['vista_synopsis'].where((ihub != '') & (vista != ihub), None)
+
+    df['film_id'] = df['film_id'].astype(int)
+    df = df.drop_duplicates('film_id')
+    log.info(f"Films from Snowflake: {len(df)}")
+
+    df = df[df['synopsis'].notna() & (df['synopsis'].astype(str).str.len() >= 5)].copy()
+    log.info(f"Films with synopsis: {len(df)}")
 
     return df
+
+
+def _load_session_film_ids(film_ids) -> set[int]:
+    """Which of the given film_ids have ever had an actual theatrical session
+    logged — EDW_ENT_PRD.SEMANTIC.VW_VHO_SESSION_SUMMARY joined via
+    DIM_VH_FILM.FILM_HO_CODE, the same join cinema_admits_models/sql/
+    db_merge_20260420.sql uses to build the box office model's real training
+    data. Used by _diff_film_meta to drop PAST-dated films with zero sessions
+    (investigation 2026-08-12: of a 2,442-film backlog, 1,818 past-dated films
+    had zero sessions even 8+ weeks after release — almost certainly films
+    that never had a meaningful theatrical run and will never be used in
+    training). Future-dated films are never checked against this — they need
+    film_meta features before they've opened at all (prediction use case).
+
+    Fails open on any Snowflake error — returns every film_id passed in,
+    so a transient connection issue never wrongly excludes real films."""
+    film_ids = [int(f) for f in film_ids]
+    if not film_ids:
+        return set()
+    try:
+        from base_snowflake import SnowFlakeBase
+        sb = SnowFlakeBase(warehouse=SF_WAREHOUSE, database=SF_DATABASE, schema=SF_SCHEMA)
+        sb.create_snowflake_connection(SF_RSA_KEY)
+        id_list = ','.join(str(f) for f in film_ids)
+        sql = f'''
+            select distinct vh.film_id
+            from EDW_ENT_PRD.SEMANTIC.VW_VHO_SESSION_SUMMARY as sess
+            join EDW_ENT_PRD.CURATED.DIM_VH_FILM as vh on vh.film_ho_code = sess.film_ho_code
+            where vh.film_id in ({id_list})
+        '''
+        result = pd.read_sql(sql, sb.engine)
+        return set(result.iloc[:, 0].astype(int))
+    except Exception as e:
+        log.warning(f"Session-data lookup skipped ({e}) — no films dropped for lack of session data")
+        return set(film_ids)
 
 
 def load_full_film_catalogue() -> pd.DataFrame | None:
@@ -219,16 +368,35 @@ def _ensure_films(df_films: pd.DataFrame | None) -> pd.DataFrame | None:
 
 # ── Diff helpers ──────────────────────────────────────────────────────────────
 
-def _diff_synopsis_films(df_films: pd.DataFrame) -> pd.DataFrame:
+def _diff_synopsis_films(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None = None) -> pd.DataFrame:
     """Films that are new OR whose synopsis (IHUB_SYNOPSIS) OR alt_synopsis
     (VISTA_SYNOPSIS) text has changed — either source changing is enough to
     trigger re-extraction, not just the primary one, since Vista's own
-    booking description can get corrected independently of IHUB's."""
-    if not SYNOPSES_EXTRACTED_PATH.exists():
-        log.info("No existing synopsis parquet — all films are new")
+    booking description can get corrected independently of IHUB's.
+
+    Applies the same skip-distributor filter (FILM_META_SKIP_DISTRIBUTORS —
+    festivals/events/sports, no extractable synopsis-worthy content) and
+    duplicate-booking variant filter (_apply_variant_merge) film_meta uses,
+    BEFORE diffing — neither ran on this path before, so every festival/event
+    booking and every 3D/IMAX/rescreening variant was getting its own separate
+    synopsis extraction for nothing downstream would use. No-op if film_lookup
+    is None (variant filter only). Also drops films with no usable synopsis
+    text at all (see _drop_no_usable_synopsis) — extracting from "Plot
+    unknown" produces nothing but null/unknown classifications.
+    """
+    if 'dstbtr' in df_films.columns:
+        n0 = len(df_films)
+        df_films = df_films[~df_films['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+        if n0 - len(df_films):
+            log.info(f"synopsis skip-distributors: -{n0 - len(df_films)} → {len(df_films)}")
+    df_films = _drop_no_usable_synopsis(df_films)
+    df_films = _apply_variant_merge(df_films, film_lookup, label="synopsis")
+
+    existing = s3_checkpoint.read_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)
+    if existing is None:
+        log.info("No existing synopsis parquet on S3 — all films are new")
         return df_films
 
-    existing = pd.read_parquet(SYNOPSES_EXTRACTED_PATH)
     existing['film_id'] = existing['film_id'].astype(int)
     has_alt_old = 'alt_synopsis' in existing.columns
     has_alt_new = 'alt_synopsis' in df_films.columns
@@ -294,19 +462,17 @@ def _diff_actors(df_films: pd.DataFrame) -> list[str]:
 
     done: set[str] = set()
     retry: set[str] = set()
-    if CAST_ENRICHED_PATH.exists():
-        cast_df = pd.read_parquet(CAST_ENRICHED_PATH, columns=['actor_name', 'fame_tier'])
+    cast_df = s3_checkpoint.read_parquet(CAST_S3_NAME, CAST_FILENAME, columns=['actor_name', 'fame_tier'])
+    if cast_df is not None:
         names = cast_df['actor_name'].astype(str).str.upper().str.strip()
         done |= set(names)
         retry |= set(names[cast_df['fame_tier'].astype(str).str.strip().str.lower() == 'unknown'])
-    if CAST_CHECKPOINT_PATH.exists():
-        with open(CAST_CHECKPOINT_PATH) as f:
-            checkpoint = json.load(f)
-        for k, v in checkpoint.items():
-            name = str(k).upper().strip()
-            done.add(name)
-            if str(v.get('fame_tier', '')).strip().lower() == 'unknown':
-                retry.add(name)
+    checkpoint = s3_checkpoint.load_checkpoint(CAST_S3_NAME)
+    for k, v in checkpoint.items():
+        name = str(k).upper().strip()
+        done.add(name)
+        if str(v.get('fame_tier', '')).strip().lower() == 'unknown':
+            retry.add(name)
 
     resolved = done - retry
     retry_candidates = all_actors & retry
@@ -360,19 +526,17 @@ def _diff_directors(df_films: pd.DataFrame) -> list[str]:
 
     done: set[str] = set()
     retry: set[str] = set()
-    if DIRECTOR_ENRICHED_PATH.exists():
-        dir_df = pd.read_parquet(DIRECTOR_ENRICHED_PATH, columns=['director_name', 'director_tier'])
+    dir_df = s3_checkpoint.read_parquet(DIRECTOR_S3_NAME, DIRECTOR_FILENAME, columns=['director_name', 'director_tier'])
+    if dir_df is not None:
         names = dir_df['director_name'].astype(str).str.strip()
         done |= set(names)
         retry |= set(names[dir_df['director_tier'].astype(str).str.strip().str.lower() == 'unknown'])
-    if DIRECTOR_CHECKPOINT_PATH.exists():
-        with open(DIRECTOR_CHECKPOINT_PATH) as f:
-            checkpoint = json.load(f)
-        for k, v in checkpoint.items():
-            name = str(k).strip()
-            done.add(name)
-            if str(v.get('director_tier', '')).strip().lower() == 'unknown':
-                retry.add(name)
+    checkpoint = s3_checkpoint.load_checkpoint(DIRECTOR_S3_NAME)
+    for k, v in checkpoint.items():
+        name = str(k).strip()
+        done.add(name)
+        if str(v.get('director_tier', '')).strip().lower() == 'unknown':
+            retry.add(name)
 
     to_retry = all_dirs & retry
     new = sorted((all_dirs - done) | to_retry)
@@ -382,9 +546,13 @@ def _diff_directors(df_films: pd.DataFrame) -> list[str]:
 
 
 def _persist_variant_map(variant_map: pd.DataFrame) -> None:
-    """Merge freshly detected film_id variants into FILM_ID_VARIANTS_PATH.
-    keep='last' so a re-run with better data (richer synopsis/cast) can
-    flip which side is canonical without a stale row surviving."""
+    """Merge freshly detected film_id variants into film_id_variants.parquet
+    on S3. keep='last' so a re-run with better data (richer synopsis/cast)
+    can flip which side is canonical without a stale row surviving.
+
+    NOTE: cleanup_film_meta.py's own persist_variant_map() (used by its
+    standalone local CLI) still writes the LOCAL FILM_ID_VARIANTS_PATH copy
+    — the two are no longer the same file. See CLAUDE.md."""
     if variant_map.empty:
         return
     # Force to string — this file is written by two different code paths
@@ -396,9 +564,8 @@ def _persist_variant_map(variant_map: pd.DataFrame) -> None:
         if col in variant_map.columns:
             variant_map[col] = variant_map[col].apply(lambda v: str(v) if pd.notna(v) else None)
 
-    FILM_ID_VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if FILM_ID_VARIANTS_PATH.exists():
-        existing = pd.read_parquet(FILM_ID_VARIANTS_PATH)
+    existing = s3_checkpoint.read_parquet(FILM_META_S3_NAME, FILM_ID_VARIANTS_FILENAME)
+    if existing is not None:
         for col in ('variant_rel_at', 'canonical_rel_at'):
             if col in existing.columns:
                 existing[col] = existing[col].apply(lambda v: str(v) if pd.notna(v) else None)
@@ -406,18 +573,24 @@ def _persist_variant_map(variant_map: pd.DataFrame) -> None:
                .drop_duplicates(subset='film_id', keep='last'))
     else:
         out = variant_map
-    out.to_parquet(FILM_ID_VARIANTS_PATH, index=False)
+    s3_checkpoint.write_parquet(FILM_META_S3_NAME, FILM_ID_VARIANTS_FILENAME, out)
     log.info(f"film_meta variants: {len(variant_map)} film_id(s) mapped onto a canonical "
-             f"release this run ({len(out)} total) → {FILM_ID_VARIANTS_PATH}")
+             f"release this run ({len(out)} total) → "
+             f"{s3_checkpoint.s3_uri(FILM_META_S3_NAME, FILM_ID_VARIANTS_FILENAME)}")
 
 
-def _apply_variant_merge(df: pd.DataFrame, film_lookup: pd.DataFrame | None) -> pd.DataFrame:
+def _apply_variant_merge(df: pd.DataFrame, film_lookup: pd.DataFrame | None, label: str = "film_meta") -> pd.DataFrame:
     """Drops genuine re-releases (keyword/year/language title match, no specific
     pairing) and duplicate-booking variants (fuzzy-matched to another film_id
     that already represents the same release — see film_variant_merge.py),
-    keeping only the canonical film_id. Persists the variant crosswalk so a
-    variant film_id can be resolved back to whichever film_id actually holds
-    the film_meta data.
+    keeping only the canonical film_id. Persists the variant crosswalk (shared
+    across every caller — a variant film_id resolves to the same canonical
+    film_id regardless of which extraction path is asking) so a variant
+    film_id can be resolved back to whichever film_id actually holds the data.
+
+    Called from both the film_meta path and the synopsis path (_diff_synopsis_
+    films) — `label` is just for the log line, which path called doesn't change
+    the filtering logic itself.
     """
     if film_lookup is None or 'rel_at' not in film_lookup.columns:
         return df
@@ -429,11 +602,35 @@ def _apply_variant_merge(df: pd.DataFrame, film_lookup: pd.DataFrame | None) -> 
 
     n_dropped = len(df) - len(df_filtered)
     if n_dropped:
-        log.info(f"film_meta re-releases/variants filtered: -{n_dropped} "
+        log.info(f"{label} re-releases/variants filtered: -{n_dropped} "
                  f"({len(variant_map)} duplicate-booking, {n_dropped - len(variant_map)} keyword/year/language) "
                  f"→ {len(df_filtered)}")
-    _persist_variant_map(variant_map)
+    try:
+        _persist_variant_map(variant_map)
+    except Exception as e:
+        # Filtering already succeeded and df_filtered is good to use — an S3
+        # error persisting the crosswalk (e.g. an expired Stax token) shouldn't
+        # crash the whole diff, just mean this run's variant map isn't saved
+        # (the next successful run will re-detect and persist the same map).
+        log.warning(f"{label} variant map persist skipped ({e})")
     return df_filtered
+
+
+def _drop_no_session_past_films(df: pd.DataFrame) -> pd.DataFrame:
+    """Drops past-dated films with zero theatrical session data (see
+    _load_session_film_ids's docstring for why). Future-dated films are
+    always kept regardless — they need film_meta features before they've
+    opened at all (prediction use case)."""
+    today = pd.Timestamp.now(tz='UTC')
+    is_future = df['rel_at'] > today
+    past = df[~is_future]
+    session_ids = _load_session_film_ids(past['film_id'])
+    no_session_ids = set(past.loc[~past['film_id'].astype(int).isin(session_ids), 'film_id'].astype(int))
+    if no_session_ids:
+        df = df[is_future | ~df['film_id'].astype(int).isin(no_session_ids)]
+        log.info(f"film_meta no-session-data filtered: -{len(no_session_ids)} "
+                 f"(past-dated, zero theatrical sessions) → {len(df)}")
+    return df
 
 
 def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) -> pd.DataFrame:
@@ -443,6 +640,11 @@ def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) ->
     Checks the checkpoint as well as the parquet so a partially-completed run (where
     the checkpoint has been written but the final parquet flush has not yet happened)
     isn't re-extracted.
+
+    Also drops past-dated films with zero theatrical session data (see
+    _load_session_film_ids) — applied LAST, after the checkpoint diff, so the
+    live Snowflake session-data query only runs against the actual candidate
+    set instead of the whole catalogue.
     """
     df = df_films.copy()
     n0 = len(df)
@@ -454,31 +656,33 @@ def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) ->
     df = _apply_variant_merge(df, film_lookup)
 
     done_ids: set[int] = set()
-    if FILM_META_CHECKPOINT_PATH.exists():
-        with open(FILM_META_CHECKPOINT_PATH) as f:
-            done_ids |= {int(k) for k in json.load(f)}
-    if FILM_META_ENRICHED_PATH.exists():
-        done_ids |= set(
-            pd.read_parquet(FILM_META_ENRICHED_PATH, columns=['film_id'])
-            ['film_id'].astype(int)
-        )
+    checkpoint = s3_checkpoint.load_checkpoint(FILM_META_S3_NAME)
+    done_ids |= {int(k) for k in checkpoint}
+    existing = s3_checkpoint.read_parquet(FILM_META_S3_NAME, FILM_META_FILENAME, columns=['film_id'])
+    if existing is not None:
+        done_ids |= set(existing['film_id'].astype(int))
 
     df = df[~df['film_id'].astype(int).isin(done_ids)]
     log.info(f"film_meta diff: {len(done_ids)} already done — {len(df)} to extract")
+
+    df = _drop_no_session_past_films(df)
     return df
 
 
 # ── Extraction steps ──────────────────────────────────────────────────────────
 
 def _sync_synopsis_checkpoint(df: pd.DataFrame) -> None:
-    """Regenerate synopsis_progress.json from the just-written parquet.
+    """Regenerate a LOCAL synopsis_progress.json from the just-written parquet.
 
-    refresh.py's synopsis path never writes this checkpoint mid-run (see
-    _extract_synopses — it only flushes once, at the end), but main.py's own
-    synopsis path checks it (existence only, no diffing) to decide what's
-    already done. Without this, a film refresh.py just extracted would look
-    "not done" to main.py and get re-extracted from scratch — see CLAUDE.md's
-    "refresh.py and main.py must agree on the work-set" note.
+    This is the one deliberate local-disk write left in this module —
+    refresh.py's own diff/checkpoint logic never reads it (see
+    _diff_synopsis_films, which diffs against the S3 parquet only). It exists
+    purely so main.py's own (local-disk-only) synopsis path, if run on the
+    same machine, sees these films as already done instead of re-extracting
+    them from scratch. Wrapped defensively since a Dagster/Kubernetes pod may
+    have no writable local disk at all — that's fine, it just means this
+    compatibility shim silently does nothing there, which is harmless (main.py
+    isn't running in that pod either). See CLAUDE.md's S3 checkpoint notes.
     """
     if df.empty or 'film_id' not in df.columns:
         return
@@ -486,18 +690,31 @@ def _sync_synopsis_checkpoint(df: pd.DataFrame) -> None:
     def _to_json_native(value):
         if isinstance(value, np.ndarray):
             return value.tolist()
+        # Plain Python list/tuple (e.g. an empty [] from a list-valued
+        # extraction field, per the "lists default to [] never null" prompt
+        # convention) — must be checked BEFORE pd.isna(), which is vectorized
+        # over list-like inputs and returns an array, not a bool, making
+        # `if pd.isna(value)` raise "truth value of an array is ambiguous."
+        if isinstance(value, (list, tuple)):
+            return list(value)
         if isinstance(value, np.generic):
             return value.item()
         return None if pd.isna(value) else value
 
-    checkpoint = {
-        str(row['film_id']): {k: _to_json_native(v) for k, v in row.items()}
-        for _, row in df.iterrows()
-    }
-    SYNOPSIS_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SYNOPSIS_CHECKPOINT_PATH, 'w') as f:
-        json.dump(checkpoint, f, default=str)
-    log.info(f"Synopsis checkpoint synced from parquet → {SYNOPSIS_CHECKPOINT_PATH} ({len(checkpoint)} films)")
+    # Best-effort local compatibility shim (see docstring) — any failure here,
+    # not just a file-write error, should never take down the real S3-based
+    # synopsis path with it.
+    try:
+        checkpoint = {
+            str(row['film_id']): {k: _to_json_native(v) for k, v in row.items()}
+            for _, row in df.iterrows()
+        }
+        SYNOPSIS_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(SYNOPSIS_CHECKPOINT_PATH, 'w') as f:
+            json.dump(checkpoint, f, default=str)
+        log.info(f"Synopsis checkpoint synced from parquet → {SYNOPSIS_CHECKPOINT_PATH} ({len(checkpoint)} films)")
+    except Exception as e:
+        log.info(f"Skipping local synopsis checkpoint sync ({e})")
 
 
 async def _extract_synopses(df: pd.DataFrame) -> None:
@@ -541,15 +758,14 @@ async def _extract_synopses(df: pd.DataFrame) -> None:
             log.warning(f"{n_err} films had extraction errors — excluded")
         df_new = df_new[df_new['_error'].isna()].copy()
 
-    SYNOPSES_EXTRACTED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if SYNOPSES_EXTRACTED_PATH.exists():
-        existing = pd.read_parquet(SYNOPSES_EXTRACTED_PATH)
+    existing = s3_checkpoint.read_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)
+    if existing is not None:
         out = (pd.concat([df_new, existing], ignore_index=True)
                .drop_duplicates(subset='film_id', keep='first'))
     else:
         out = df_new
-    out.to_parquet(SYNOPSES_EXTRACTED_PATH, engine='pyarrow', index=False)
-    log.info(f"Synopsis parquet → {SYNOPSES_EXTRACTED_PATH}  ({len(out)} total)")
+    s3_checkpoint.write_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME, out)
+    log.info(f"Synopsis parquet → {s3_checkpoint.s3_uri(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)}  ({len(out)} total)")
     _sync_synopsis_checkpoint(out)
 
     if extractor.token_usage:
@@ -572,11 +788,8 @@ async def _enrich_cast(new_actors: list[str]) -> None:
     if not new_actors:
         return
 
-    CAST_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint: dict = {}
-    if CAST_CHECKPOINT_PATH.exists():
-        with open(CAST_CHECKPOINT_PATH) as f:
-            checkpoint = json.load(f)
+    checkpoint: dict = s3_checkpoint.load_checkpoint(CAST_S3_NAME)
+    if checkpoint:
         log.info(f"Loaded cast checkpoint: {len(checkpoint)} actors already done")
 
     tasks       = load_tasks_from_yaml(CAST_PROMPTS_PATH)
@@ -604,11 +817,14 @@ async def _enrich_cast(new_actors: list[str]) -> None:
             max_concurrency=META_MAX_CONCURRENCY,
         )
 
+        batch_success: dict[str, dict] = {}
         batch_errors: dict[str, dict] = {}
         batch_success_keys: set[str] = set()
         for actor_name, data in results.items():
             if not data.get('_error'):
-                checkpoint[str(actor_name)] = {**data, 'actor_name': actor_name}
+                entry = {**data, 'actor_name': actor_name}
+                checkpoint[str(actor_name)] = entry
+                batch_success[str(actor_name)] = entry
                 batch_success_keys.add(str(actor_name))
             else:
                 batch_errors[str(actor_name)] = {
@@ -617,26 +833,35 @@ async def _enrich_cast(new_actors: list[str]) -> None:
                     '_raw_output': data.get('_raw_output'),
                 }
 
-        with open(CAST_CHECKPOINT_PATH, 'w') as f:
-            json.dump(checkpoint, f, default=str)
-        log.info(f"  Checkpoint saved: {len(checkpoint)} actors → {CAST_CHECKPOINT_PATH}")
+        # One small delta object per batch — not a full rewrite of the whole
+        # checkpoint (see s3_checkpoint.py's module docstring for why).
+        try:
+            s3_checkpoint.append_checkpoint(CAST_S3_NAME, batch_success)
+            log.info(f"  Checkpoint delta saved: {len(batch_success)} actors "
+                     f"({len(checkpoint)} total so far)")
+        except Exception as e:
+            # See _enrich_film_meta's identical guard — stop spending on new
+            # batches the moment persistence breaks; this batch's results are
+            # still in `checkpoint` for the final flush to try.
+            log.error(f"  Checkpoint save failed ({e}) — stopping after batch {batch_num}/{len(chunks)}. "
+                      f"{len(checkpoint)} actors extracted so far will be flushed to parquet below; "
+                      f"re-authenticate (stax2aws login) and re-run to pick up any remainder.")
+            break
 
-        if batch_errors or (batch_success_keys and CAST_ERRORS_PATH.exists()):
-            existing_errors: dict = {}
-            if CAST_ERRORS_PATH.exists():
-                with open(CAST_ERRORS_PATH) as f:
-                    existing_errors = json.load(f)
-            purged_n = sum(1 for k in batch_success_keys
-                           if existing_errors.pop(k, None) is not None)
-            existing_errors.update(batch_errors)
-            if purged_n or batch_errors:
-                with open(CAST_ERRORS_PATH, 'w') as f:
-                    json.dump(existing_errors, f, default=str, indent=2)
-            msg = f"  Errors this batch: {len(batch_errors)}"
-            if purged_n:
-                msg += f"  [purged {purged_n} now-recovered]"
-            msg += f" → {CAST_ERRORS_PATH}"
-            log.info(msg)
+        if batch_errors or batch_success_keys:
+            try:
+                existing_errors = s3_checkpoint.load_errors(CAST_S3_NAME)
+                purged_n = sum(1 for k in batch_success_keys
+                               if existing_errors.pop(k, None) is not None)
+                existing_errors.update(batch_errors)
+                if purged_n or batch_errors:
+                    s3_checkpoint.save_errors(CAST_S3_NAME, existing_errors)
+                msg = f"  Errors this batch: {len(batch_errors)}"
+                if purged_n:
+                    msg += f"  [purged {purged_n} now-recovered]"
+                log.info(msg)
+            except Exception as e:
+                log.warning(f"  Errors-file save skipped ({e}) — successful extractions this batch are unaffected")
 
         if extractor.token_usage:
             curr  = extractor.token_usage.get('cost_usd', 0.0)
@@ -659,9 +884,8 @@ async def _enrich_cast(new_actors: list[str]) -> None:
         if col in df_new.columns:
             df_new[col] = df_new[col].astype(str).str.lower().str.strip()
 
-    CAST_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if CAST_ENRICHED_PATH.exists():
-        existing = pd.read_parquet(CAST_ENRICHED_PATH)
+    existing = s3_checkpoint.read_parquet(CAST_S3_NAME, CAST_FILENAME)
+    if existing is not None:
         # keep='last' so a freshly retried actor's new result (df_new) overrides
         # the stale row in existing — keep='first' would silently discard every
         # unknown-retry update at flush time.
@@ -669,8 +893,11 @@ async def _enrich_cast(new_actors: list[str]) -> None:
                .drop_duplicates(subset='actor_name', keep='last'))
     else:
         out = df_new
-    out.to_parquet(CAST_ENRICHED_PATH, engine='pyarrow', index=False)
-    log.info(f"Cast parquet → {CAST_ENRICHED_PATH}  ({len(out)} actors)")
+    s3_checkpoint.write_parquet(CAST_S3_NAME, CAST_FILENAME, out)
+    log.info(f"Cast parquet → {s3_checkpoint.s3_uri(CAST_S3_NAME, CAST_FILENAME)}  ({len(out)} actors)")
+
+    n_compacted = s3_checkpoint.compact_checkpoint(CAST_S3_NAME)
+    log.info(f"Cast checkpoint compacted: {n_compacted} deltas folded into snapshot")
 
     if extractor.token_usage:
         u = extractor.token_usage
@@ -690,11 +917,8 @@ async def _enrich_directors(new_directors: list[str]) -> None:
     if not new_directors:
         return
 
-    DIRECTOR_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint: dict = {}
-    if DIRECTOR_CHECKPOINT_PATH.exists():
-        with open(DIRECTOR_CHECKPOINT_PATH) as f:
-            checkpoint = json.load(f)
+    checkpoint: dict = s3_checkpoint.load_checkpoint(DIRECTOR_S3_NAME)
+    if checkpoint:
         log.info(f"Loaded director checkpoint: {len(checkpoint)} directors already done")
 
     tasks     = load_tasks_from_yaml(DIRECTOR_PROMPTS_PATH)
@@ -722,11 +946,14 @@ async def _enrich_directors(new_directors: list[str]) -> None:
             max_concurrency=META_MAX_CONCURRENCY,
         )
 
+        batch_success: dict[str, dict] = {}
         batch_errors: dict[str, dict] = {}
         batch_success_keys: set[str] = set()
         for name, data in results.items():
             if not data.get('_error'):
-                checkpoint[str(name)] = {**data, 'director_name': name}
+                entry = {**data, 'director_name': name}
+                checkpoint[str(name)] = entry
+                batch_success[str(name)] = entry
                 batch_success_keys.add(str(name))
             else:
                 batch_errors[str(name)] = {
@@ -735,25 +962,20 @@ async def _enrich_directors(new_directors: list[str]) -> None:
                     '_raw_output':   data.get('_raw_output'),
                 }
 
-        with open(DIRECTOR_CHECKPOINT_PATH, 'w') as f:
-            json.dump(checkpoint, f, default=str)
-        log.info(f"  Checkpoint saved: {len(checkpoint)} directors → {DIRECTOR_CHECKPOINT_PATH}")
+        s3_checkpoint.append_checkpoint(DIRECTOR_S3_NAME, batch_success)
+        log.info(f"  Checkpoint delta saved: {len(batch_success)} directors "
+                 f"({len(checkpoint)} total so far)")
 
-        if batch_errors or (batch_success_keys and DIRECTOR_ERRORS_PATH.exists()):
-            existing_errors: dict = {}
-            if DIRECTOR_ERRORS_PATH.exists():
-                with open(DIRECTOR_ERRORS_PATH) as f:
-                    existing_errors = json.load(f)
+        if batch_errors or batch_success_keys:
+            existing_errors = s3_checkpoint.load_errors(DIRECTOR_S3_NAME)
             purged_n = sum(1 for k in batch_success_keys
                            if existing_errors.pop(k, None) is not None)
             existing_errors.update(batch_errors)
             if purged_n or batch_errors:
-                with open(DIRECTOR_ERRORS_PATH, 'w') as f:
-                    json.dump(existing_errors, f, default=str, indent=2)
+                s3_checkpoint.save_errors(DIRECTOR_S3_NAME, existing_errors)
             msg = f"  Errors this batch: {len(batch_errors)}"
             if purged_n:
                 msg += f"  [purged {purged_n} now-recovered]"
-            msg += f" → {DIRECTOR_ERRORS_PATH}"
             log.info(msg)
 
         if extractor.token_usage:
@@ -777,9 +999,8 @@ async def _enrich_directors(new_directors: list[str]) -> None:
         if col in df_new.columns:
             df_new[col] = df_new[col].astype(str).str.lower().str.strip()
 
-    DIRECTOR_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if DIRECTOR_ENRICHED_PATH.exists():
-        existing = pd.read_parquet(DIRECTOR_ENRICHED_PATH)
+    existing = s3_checkpoint.read_parquet(DIRECTOR_S3_NAME, DIRECTOR_FILENAME)
+    if existing is not None:
         # keep='last' so a freshly retried director's new result (df_new) overrides
         # the stale row in existing — keep='first' would silently discard every
         # unknown-retry update at flush time.
@@ -787,8 +1008,11 @@ async def _enrich_directors(new_directors: list[str]) -> None:
                .drop_duplicates(subset='director_name', keep='last'))
     else:
         out = df_new
-    out.to_parquet(DIRECTOR_ENRICHED_PATH, engine='pyarrow', index=False)
-    log.info(f"Director parquet → {DIRECTOR_ENRICHED_PATH}  ({len(out)} directors)")
+    s3_checkpoint.write_parquet(DIRECTOR_S3_NAME, DIRECTOR_FILENAME, out)
+    log.info(f"Director parquet → {s3_checkpoint.s3_uri(DIRECTOR_S3_NAME, DIRECTOR_FILENAME)}  ({len(out)} directors)")
+
+    n_compacted = s3_checkpoint.compact_checkpoint(DIRECTOR_S3_NAME)
+    log.info(f"Director checkpoint compacted: {n_compacted} deltas folded into snapshot")
 
     if extractor.token_usage:
         u = extractor.token_usage
@@ -813,13 +1037,9 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
     if df.empty:
         return
 
-    FILM_META_CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if FILM_META_CHECKPOINT_PATH.exists():
-        with open(FILM_META_CHECKPOINT_PATH) as f:
-            checkpoint: dict = json.load(f)
+    checkpoint: dict = s3_checkpoint.load_checkpoint(FILM_META_S3_NAME)
+    if checkpoint:
         log.info(f"Loaded film_meta checkpoint: {len(checkpoint)} films already done")
-    else:
-        checkpoint = {}
 
     done_ids = {int(k) for k in checkpoint}
     df = df[~df['film_id'].astype(int).isin(done_ids)].copy()
@@ -863,6 +1083,7 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
         )
 
         title_lookup = chunk.set_index('film_id')['film_title'].to_dict()
+        batch_success: dict[str, dict] = {}
         batch_errors: dict[str, dict] = {}
         batch_success_ids: set[str] = set()
         for film_id, data in results.items():
@@ -872,6 +1093,7 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
                 data['evt_dstbtr'] = str(pt.get('evt_dstbtr')) if pd.notna(pt.get('evt_dstbtr')) else None
                 data['evt_rel_at'] = str(pt.get('evt_rel_at')) if pd.notna(pt.get('evt_rel_at')) else None
                 checkpoint[str(film_id)] = data
+                batch_success[str(film_id)] = data
                 batch_success_ids.add(str(film_id))
             else:
                 batch_errors[str(film_id)] = {
@@ -881,35 +1103,46 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
                     '_raw_output': data.get('_raw_output'),
                 }
 
-        with open(FILM_META_CHECKPOINT_PATH, 'w') as f:
-            json.dump(checkpoint, f, default=str)
-        log.info(f"  Checkpoint saved: {len(checkpoint)} films → {FILM_META_CHECKPOINT_PATH}")
+        try:
+            s3_checkpoint.append_checkpoint(FILM_META_S3_NAME, batch_success)
+            log.info(f"  Checkpoint delta saved: {len(batch_success)} films "
+                     f"({len(checkpoint)} total so far)")
+        except Exception as e:
+            # S3 auth (Stax tokens expire hourly — a ~25-batch film_meta run
+            # routinely outlasts that) or a transient network error. Stop
+            # starting NEW batches immediately — every further batch would
+            # spend real OpenAI money on results we already know we can't
+            # persist. This batch's results are still in `checkpoint` (set
+            # above, before this call), so the flush below will still try to
+            # save them along with everything from earlier successful batches.
+            log.error(f"  Checkpoint save failed ({e}) — stopping after batch {batch_num}/{len(chunks)}. "
+                      f"{len(checkpoint)} films extracted so far will be flushed to parquet below; "
+                      f"re-authenticate (stax2aws login) and re-run to pick up any remainder.")
+            break
 
-        # Errors JSON: merge in new errors AND drop entries for films that just
+        # Errors: merge in new errors AND drop entries for films that just
         # succeeded (covers both this batch's wins and stale entries from prior
         # runs that have since recovered).
-        if batch_errors or (batch_success_ids and FILM_META_ERRORS_PATH.exists()):
-            existing_errors: dict = {}
-            if FILM_META_ERRORS_PATH.exists():
-                with open(FILM_META_ERRORS_PATH) as f:
-                    existing_errors = json.load(f)
-            purged_n = sum(1 for fid in batch_success_ids
-                           if existing_errors.pop(fid, None) is not None)
-            existing_errors.update(batch_errors)
-            if purged_n or batch_errors:
-                with open(FILM_META_ERRORS_PATH, 'w') as f:
-                    json.dump(existing_errors, f, default=str, indent=2)
-            err_counts: dict[str, int] = {}
-            for v in batch_errors.values():
-                key = str(v.get('_error', 'unknown')).split(':')[0][:40]
-                err_counts[key] = err_counts.get(key, 0) + 1
-            msg = f"  Errors this batch: {len(batch_errors)}"
-            if err_counts:
-                msg += f" ({', '.join(f'{k}={n}' for k, n in err_counts.items())})"
-            if purged_n:
-                msg += f"  [purged {purged_n} now-recovered]"
-            msg += f" → {FILM_META_ERRORS_PATH}"
-            log.info(msg)
+        if batch_errors or batch_success_ids:
+            try:
+                existing_errors = s3_checkpoint.load_errors(FILM_META_S3_NAME)
+                purged_n = sum(1 for fid in batch_success_ids
+                               if existing_errors.pop(fid, None) is not None)
+                existing_errors.update(batch_errors)
+                if purged_n or batch_errors:
+                    s3_checkpoint.save_errors(FILM_META_S3_NAME, existing_errors)
+                err_counts: dict[str, int] = {}
+                for v in batch_errors.values():
+                    key = str(v.get('_error', 'unknown')).split(':')[0][:40]
+                    err_counts[key] = err_counts.get(key, 0) + 1
+                msg = f"  Errors this batch: {len(batch_errors)}"
+                if err_counts:
+                    msg += f" ({', '.join(f'{k}={n}' for k, n in err_counts.items())})"
+                if purged_n:
+                    msg += f"  [purged {purged_n} now-recovered]"
+                log.info(msg)
+            except Exception as e:
+                log.warning(f"  Errors-file save skipped ({e}) — successful extractions this batch are unaffected")
 
         if extractor.token_usage:
             curr  = extractor.token_usage.get('cost_usd', 0.0)
@@ -927,9 +1160,13 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
             errors='ignore',
         )
 
-    FILM_META_ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if FILM_META_ENRICHED_PATH.exists():
-        existing = pd.read_parquet(FILM_META_ENRICHED_PATH)
+    # Final flush — deliberately NOT wrapped to swallow errors: if this fails
+    # (e.g. the same expired token that stopped the loop above), everything in
+    # `checkpoint` from batches whose delta-append also failed is genuinely
+    # unsaved and the run SHOULD report failure, not a false success. Batches
+    # that appended successfully above are already safe in S3 regardless.
+    existing = s3_checkpoint.read_parquet(FILM_META_S3_NAME, FILM_META_FILENAME)
+    if existing is not None:
         out = (pd.concat([existing, df_new], ignore_index=True)
                .drop_duplicates(subset='film_id', keep='last'))
     else:
@@ -945,8 +1182,11 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
                  f"{out_stats['n_variants_dropped']} format-variant duplicates merged away")
     _persist_variant_map(out_variant_map)
 
-    out.to_parquet(FILM_META_ENRICHED_PATH, engine='pyarrow', index=False)
-    log.info(f"film_meta parquet → {FILM_META_ENRICHED_PATH}  ({len(out)} films)")
+    s3_checkpoint.write_parquet(FILM_META_S3_NAME, FILM_META_FILENAME, out)
+    log.info(f"film_meta parquet → {s3_checkpoint.s3_uri(FILM_META_S3_NAME, FILM_META_FILENAME)}  ({len(out)} films)")
+
+    n_compacted = s3_checkpoint.compact_checkpoint(FILM_META_S3_NAME)
+    log.info(f"film_meta checkpoint compacted: {n_compacted} deltas folded into snapshot")
 
     if extractor.token_usage:
         u = extractor.token_usage
@@ -965,7 +1205,15 @@ def refresh_synopsis(df_films: pd.DataFrame | None = None, force: bool = False) 
     if df_films is None:
         return {'path': 'synopsis', 'updated': False, 'reason': 'snowflake_unavailable'}
 
-    to_extract = df_films if force else _diff_synopsis_films(df_films)
+    film_lookup = load_full_film_catalogue()
+    if force:
+        to_extract = df_films
+        if 'dstbtr' in to_extract.columns:
+            to_extract = to_extract[~to_extract['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
+        to_extract = _drop_no_usable_synopsis(to_extract)
+        to_extract = _apply_variant_merge(to_extract, film_lookup, label="synopsis")
+    else:
+        to_extract = _diff_synopsis_films(df_films, film_lookup)
     if to_extract.empty:
         return {'path': 'synopsis', 'updated': False, 'reason': 'up_to_date'}
 
@@ -1042,6 +1290,7 @@ def refresh_film_meta(df_films: pd.DataFrame | None = None, force: bool = False)
         if 'dstbtr' in df.columns:
             df = df[~df['dstbtr'].isin(FILM_META_SKIP_DISTRIBUTORS)]
         df = _apply_variant_merge(df, film_lookup)
+        df = _drop_no_session_past_films(df)
     else:
         df = _diff_film_meta(df_films, film_lookup)
 

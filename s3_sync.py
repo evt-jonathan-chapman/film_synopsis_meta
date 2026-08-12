@@ -1,17 +1,25 @@
 """
 s3_sync.py
 ----------
-Uploads the four LLM meta-output checkpoints (synopsis, film_meta, cast_meta,
-director_meta — enriched/extracted parquet + progress json) to S3, so a
-weekly run's results land somewhere other than this machine's local disk.
+NOTE — scope narrowed: refresh.py's four extraction paths and
+film_data_merge.py now read/write S3 directly via s3_checkpoint.py (no local
+disk, no separate sync step, no Stax SSO dependency — see s3_checkpoint.py's
+module docstring). This module is no longer part of that path and is NOT
+wired into dagster_defs.py. It still exists for main.py's local-disk ad-hoc
+workflow: if you run main.py locally and want to push its output to S3
+manually, this uploads it.
 
-Deliberately a separate, standalone step rather than tacked onto the end of
-refresh_synopsis/refresh_cast/refresh_directors/refresh_film_meta in
-refresh.py — the local parquet + progress json stay the fast, resumable
-checkpoint (see CLAUDE.md's "Non-obvious behaviours"); this just mirrors the
-already-written files to S3 afterwards. Run it whenever, independently of
-the extraction jobs, via `python s3_sync.py` or the `s3_sync_job` Dagster job
-in dagster_defs.py.
+Uploads the four LLM meta-output checkpoints (synopsis, film_meta, cast_meta,
+director_meta — enriched/extracted parquet + progress json) plus the derived
+film_data_merged parquet to S3.
+
+CAUTION: the parquet files land at the SAME S3 keys refresh.py's direct
+writes use (e.g. film_meta/film_meta_enriched.parquet) — running this after
+main.py against a different/older local work-set can overwrite the Dagster
+path's output with main.py's local version. The *_progress.json files this
+uploads are main.py's local checkpoint format; they are NOT read by
+s3_checkpoint.py's cache (that lives under film_meta/cache/, etc.) — they're
+uploaded here purely as a backup/inspection artifact, not a live checkpoint.
 
 Auth: boto3 session using the AWS profile in config.yaml's `s3.profile`
 (currently `stax-stax-au1-event`, a Stax SSO profile — credentials expire
@@ -29,10 +37,12 @@ from config import DATA_DIR, S3_BUCKET, S3_PREFIX, S3_PROFILE
 
 # (local dir under DATA_DIR, s3 folder name, files to upload from that dir)
 SYNC_SPECS = [
-    ("meta_data/synopsis_v2",   "synopsis",      ["synopses_extracted.parquet", "synopsis_progress.json"]),
-    ("meta_data/film_meta",      "film_meta",     ["film_meta_enriched.parquet", "film_meta_progress.json"]),
-    ("meta_data/cast_meta",      "cast_meta",     ["cast_enriched.parquet", "cast_progress.json"]),
-    ("meta_data/director_meta",  "director_meta", ["director_enriched.parquet", "director_progress.json"]),
+    ("meta_data/synopsis_v2",       "synopsis",         ["synopses_extracted.parquet", "synopsis_progress.json"]),
+    ("meta_data/film_meta",         "film_meta",         ["film_meta_enriched.parquet", "film_meta_progress.json"]),
+    ("meta_data/cast_meta",         "cast_meta",         ["cast_enriched.parquet", "cast_progress.json"]),
+    ("meta_data/director_meta",     "director_meta",     ["director_enriched.parquet", "director_progress.json"]),
+    # No progress json — film_data_merge.py is stateless, re-derived fresh every run.
+    ("meta_data/film_data_merged",  "film_data_merged",  ["film_data_merged.parquet"]),
 ]
 
 

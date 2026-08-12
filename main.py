@@ -551,6 +551,12 @@ FILM_META_SKIP_DISTRIBUTORS = {
     # Other non-theatrical
     "AU IMAX THEATRES INTL", "ZZ Nickelodeon Australia Management",
     "ZZ CRUNCHYROLL PTY LTD", "ZZ SBS-ALTERNATE CONTENT",
+    # NZ festival equivalents — see refresh.py's copy of this set for context.
+    "NZ Italian Film Festival", "NZ French Film Festival",
+    "NZ NEW ZEALAND INT FILM FESTIVAL", "ZZ International Film Festival NZ",
+    "NZ RESENE ARCHITECTURE AND DESIGN FF", "NZ British Film Festival NZ",
+    "ZZ SHOW ME SHORTS FILM FESTIVAL", "ZZ Veterans Film Festival",
+    "ZZ GREEK FESTIVAL OF SYDNEY",
 }
 
 

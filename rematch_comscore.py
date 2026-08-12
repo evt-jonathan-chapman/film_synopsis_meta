@@ -29,6 +29,7 @@ from config import (
 )
 from base_snowflake import SnowFlakeBase
 from comscore_matcher import ComscoreMatcher
+import s3_checkpoint
 
 # Test knob — set to an int to match against a random sample, None for full run.
 LIMIT_FILMS: int | None = None
@@ -100,14 +101,20 @@ def load_evt_films() -> pd.DataFrame:
 
     # Drop concert films — they're filtered out on the Comscore side too
     # (is_alt_content), so matching against them just inflates the unmatched bucket.
-    try:
+    # film_meta_enriched.parquet is refresh.py's output, which now lives on S3 (see
+    # s3_checkpoint.py) rather than this local path — try S3 first, fall back to the
+    # local copy (e.g. a main.py-driven local run, or an old cached copy).
+    fm = s3_checkpoint.read_parquet("film_meta", "film_meta_enriched.parquet",
+                                     columns=["film_id", "adaptation_type"])
+    if fm is None and FILM_META_ENRICHED_PATH.exists():
         fm = pd.read_parquet(FILM_META_ENRICHED_PATH, columns=["film_id", "adaptation_type"])
+    if fm is not None:
         concert_ids = set(fm.loc[fm["adaptation_type"] == "concert_film", "film_id"])
         n_before = len(films)
         films = films[~films["film_id"].isin(concert_ids)].reset_index(drop=True)
         print(f"EVT films: {len(films):,} (dropped {n_before - len(films)} concert_film entries)")
-    except FileNotFoundError:
-        print("film_meta_enriched.parquet not found — skipping concert film filter")
+    else:
+        print("film_meta_enriched.parquet not found (S3 or local) — skipping concert film filter")
 
     films['rel_at'] = pd.to_datetime(films['rel_at'], utc=True, errors='coerce')
     print(f"EVT date range: {films['rel_at'].min().date()} → {films['rel_at'].max().date()}")

@@ -25,8 +25,11 @@ if [[ -f ".env" ]]; then
     set +a
 fi
 
+PORT=3001
+URL="http://127.0.0.1:${PORT}"
+
 echo ""
-echo "Starting Dagster UI (Comscore/Gower matching only) → http://127.0.0.1:3001"
+echo "Starting Dagster UI (Comscore/Gower matching only) → $URL"
 echo "No litellm/openai in this process — pure CPU fuzzy matching."
 echo ""
 echo "Jobs:"
@@ -42,4 +45,17 @@ echo "  python rematch_gower.py                  # gower only"
 echo "  python id_bridge.py                      # join comscore_cache + gower_cache"
 echo ""
 
-dagster dev -f dagster_matching_defs.py -p 3001
+dagster dev -f dagster_matching_defs.py -p "$PORT" &
+DAGSTER_PID=$!
+trap 'kill "$DAGSTER_PID" 2>/dev/null' EXIT
+
+# Open the browser as soon as the UI responds, so you're not stuck copying the URL manually
+( for _ in $(seq 1 60); do
+    if curl -s -o /dev/null "$URL"; then
+        open "$URL"
+        break
+    fi
+    sleep 0.5
+  done ) &
+
+wait "$DAGSTER_PID"
