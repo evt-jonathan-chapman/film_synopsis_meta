@@ -15,7 +15,7 @@ CASE
                             ORDER BY ABS(DATEDIFF(day, gw.snapshot_date, DATEADD(month, -3, gw.rel_date)))) = 1
         THEN '3m_pre_release'
 END AS snapshot_type
-FROM ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME AS gw
+FROM DBT.EDW_ENT_PRD.CINR_TBM_GW_LIFE_TIME AS gw
 CROSS JOIN params AS p
 WHERE gw.ter_id = 'AU'
 AND gw.rel_date >= p.start_date 

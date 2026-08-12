@@ -1,7 +1,7 @@
 # Gower Matching
 
 Maps EVT `film_id` → Gower `gower_id` (`prmry_title_no` on the Gower side)
-so Gower box-office estimates (`ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME`) can be
+so Gower box-office estimates (`DBT.EDW_ENT_PRD.CINR_TBM_GW_LIFE_TIME`) can be
 joined onto EVT films — same goal as `COMSCORE.md`, different source.
 
 Gower matching is **independent** of Comscore matching: both run their own

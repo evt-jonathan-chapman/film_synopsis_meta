@@ -1,7 +1,7 @@
 """
 gower_matcher.py
 ----------------
-Match Gower box-office rows (ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME) → EVT
+Match Gower box-office rows (DBT.EDW_ENT_PRD.CINR_TBM_GW_LIFE_TIME) → EVT
 film_id. Same fuzzy-title engine as comscore_matcher.py::ComscoreMatcher
 (shared base: title_matcher.py::FuzzyTitleMatcher) — this class only
 supplies Gower's column names and output paths.

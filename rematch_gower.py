@@ -1,7 +1,7 @@
 """
 rematch_gower.py
 -----------------
-Match EVT films → Gower (ENT_FORECAST_PRD.CURATED.GW_LIFE_TIME) rows.
+Match EVT films → Gower (DBT.EDW_ENT_PRD.CINR_TBM_GW_LIFE_TIME) rows.
 
 1. Pulls the Gower extract from Snowflake (sql/gower_export.sql).
 2. Builds the EVT films work-set via rematch_comscore.py::load_evt_films —
