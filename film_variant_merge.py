@@ -70,11 +70,23 @@ proper fix. Same-title reschedules (no format-variant qualifier) still get
 independently re-extracted for now — duplicate extraction cost, but no risk
 of misattributing a real film's metadata to a different movie.
 
-Canonical selection (format-variant path): whichever film_id has more
-complete Vista-sourced data (director, cast, synopsis populated) wins — NOT
-simply "whichever release date is earlier" or "whichever title has no
-prefix". A format variant can go either direction; the earlier/plainer
-booking isn't always the one with richer metadata attached.
+Canonical selection (format-variant path) has two separate parts, added
+2026-08-13 after finding real cases (Alita: Battle Angel, Aquaman, Lightyear,
+Jurassic World: Fallen Kingdom, Spider-Man: Brand New Day, The LEGO Movie 2,
+The Lion King) where they'd disagreed:
+  1. Extraction SOURCE — whichever film_id has more complete Vista-sourced
+     data (director, cast, synopsis populated) wins; a format variant can go
+     either direction, the general release isn't always the one with richer
+     metadata attached.
+  2. Output IDENTITY — always the group's general-release film_id (title
+     needs no 3D/GC/IMAX/etc. stripping at all) when one exists in the
+     group, regardless of which side won #1. It's fine for the extracted
+     content to come from the 3D booking; it must always be possible to look
+     the film up by its plain-release film_id. Only falls back to the
+     extraction-source winner when no general release exists in the group at
+     all (e.g. a 3D + GC pair with no plain booking).
+Both are handled in filter_variants() — see its docstring for the concrete
+mechanics (richness_winner vs. output_id, relabel_map).
 """
 import pandas as pd
 
@@ -149,20 +161,30 @@ def _resolve_groups(pairs: list[tuple]) -> dict[int, list[int]]:
     return groups
 
 
-def _format_variant_pairs(df: pd.DataFrame, title_col: str = 'film') -> list[tuple]:
+def _format_variant_pairs(df: pd.DataFrame, title_col: str = 'film') -> tuple[list[tuple], set[int]]:
     """Same-day, same-distributor bookings that differ only by a 3D/IMAX/GC/
     special-screening/festival-programme qualifier (encode_helper.py's
     _VARIANT_STRIP) — Vista assigns each of these its own film_id even though
     it's the same theatrical release. Emits one pair per non-anchor member of
-    each (base_title, rel_at, dstbtr) group with >1 film_id."""
+    each (base_title, rel_at, dstbtr) group with >1 film_id.
+
+    Also returns the set of film_ids that ARE the general release within
+    their group — i.e. their own raw title needed no stripping at all (same
+    "prefer the row whose title already equals its base_title" rule
+    encode_helper.py::consolidate_all_admits uses for admits consolidation).
+    filter_variants() uses this to force the general release's film_id as the
+    output identity even when a richer-data 3D/format booking is what's
+    actually extracted from — see its docstring."""
     needed = ['film_id', title_col, 'rel_at', 'dstbtr']
     if any(c not in df.columns for c in needed):
-        return []
+        return [], set()
 
     tmp = df[needed].dropna(subset=['rel_at']).copy()
     tmp['_base_title'] = tmp[title_col].apply(strip_format_variant)
+    tmp['_is_general_release'] = tmp['_base_title'] == tmp[title_col].astype(str).str.upper().str.strip()
 
     pairs = []
+    general_release_ids: set[int] = set()
     for (base_title, _rel_at, _dstbtr), group in tmp.groupby(['_base_title', 'rel_at', 'dstbtr']):
         ids = group['film_id'].astype(int).drop_duplicates().tolist()
         if len(ids) < 2:
@@ -170,7 +192,10 @@ def _format_variant_pairs(df: pd.DataFrame, title_col: str = 'film') -> list[tup
         anchor = ids[0]
         for other_id in ids[1:]:
             pairs.append((other_id, anchor, base_title, 100, 'format_variant'))
-    return pairs
+        general_release_ids.update(
+            int(fid) for fid in group.loc[group['_is_general_release'], 'film_id'].drop_duplicates()
+        )
+    return pairs, general_release_ids
 
 
 def filter_variants(
@@ -179,20 +204,33 @@ def filter_variants(
     title_col: str = 'film_title',
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Drop genuine re-releases and merge format-variant duplicate bookings in
-    `df`, keeping only the canonical film_id per detected group. Fuzzy-matched
-    reschedules are detected for the drop decision (ReReleaseFilter's
-    keyword/year-in-title reasons) but NOT merged — see module docstring.
+    `df`, keeping only one row per detected group. Fuzzy-matched reschedules
+    are detected for the drop decision (ReReleaseFilter's keyword/year-in-
+    title reasons) but NOT merged — see module docstring.
 
-    Returns (df_filtered, variant_map). variant_map has one row per merged
-    format-variant film_id (columns: film_id, canonical_film_id, title,
-    match_score, confirmed_by, variant_rel_at, canonical_rel_at; confirmed_by
-    is always "format_variant") — empty if none were found. Keyword/
-    year-in-title-flagged re-releases are dropped from df_filtered too but
-    have no specific film_id to map onto, so they never appear in
-    variant_map.
+    Extraction source vs. output identity: the row that survives filtering
+    (and so is what actually gets sent to the LLM) is whichever group member
+    has the richest Vista data (_richness) — a 3D/format booking wins over
+    the general release there if IT has the populated director/cast/synopsis
+    and the general release doesn't. But the film_id that surviving row is
+    stored under is always the group's general-release film_id when one
+    exists in the group (see _format_variant_pairs' general_release_ids) —
+    downstream consumers must always be able to look a film up by its plain
+    film_id, regardless of which specific booking happened to have the
+    richest metadata. When the richness winner IS the general release (the
+    common case), this is a no-op — output_id == richness_winner.
+
+    Returns (df_filtered, variant_map). variant_map has one row per film_id
+    that does NOT have its own row in df_filtered — every other group member
+    besides output_id, INCLUDING the richness winner itself when it differs
+    from output_id (columns: film_id, canonical_film_id, title, match_score,
+    confirmed_by, variant_rel_at, canonical_rel_at; confirmed_by is always
+    "format_variant") — empty if none were found. Keyword/year-in-title-
+    flagged re-releases are dropped from df_filtered too but have no specific
+    film_id to map onto, so they never appear in variant_map.
     """
     df_renamed = df.rename(columns={title_col: 'film'})
-    format_pairs = _format_variant_pairs(df_renamed)
+    format_pairs, general_release_ids = _format_variant_pairs(df_renamed)
 
     keyword_drop_ids: set[int] = set()
     if film_lookup is not None and 'rel_at' in film_lookup.columns:
@@ -201,6 +239,9 @@ def filter_variants(
             flagged.loc[flagged['rerelease_reason'].isin(_KEYWORD_DROP_REASONS), 'film_id']
             .astype(int)
         )
+
+    df_drop_ids: set[int] = set()
+    relabel_map: dict[int, int] = {}  # richness winner's film_id -> output_id, only when they differ
 
     if not format_pairs:
         variant_map = pd.DataFrame(columns=_VARIANT_MAP_COLUMNS)
@@ -222,15 +263,23 @@ def filter_variants(
             if len(members) < 2:
                 continue
             ordered = sorted(members, key=sort_key)
-            canonical_id = ordered[0]
-            canonical_rel_at = richness.loc[canonical_id, 'rel_at'] if canonical_id in richness.index else None
+            richness_winner = ordered[0]
+            df_drop_ids.update(ordered[1:])  # only the richness winner's row survives in df
 
-            for variant_id in ordered[1:]:
-                info = edge_info.get(variant_id) or edge_info.get(canonical_id) or {}
-                variant_rel_at = richness.loc[variant_id, 'rel_at'] if variant_id in richness.index else None
+            general_candidates = [m for m in ordered if m in general_release_ids]
+            output_id = general_candidates[0] if general_candidates else richness_winner
+            if output_id != richness_winner:
+                relabel_map[richness_winner] = output_id
+            output_rel_at = richness.loc[output_id, 'rel_at'] if output_id in richness.index else None
+
+            for member_id in ordered:
+                if member_id == output_id:
+                    continue
+                info = edge_info.get(member_id) or edge_info.get(richness_winner) or {}
+                member_rel_at = richness.loc[member_id, 'rel_at'] if member_id in richness.index else None
                 out_rows.append({
-                    'film_id': variant_id,
-                    'canonical_film_id': canonical_id,
+                    'film_id': member_id,
+                    'canonical_film_id': output_id,
                     'title': info.get('title'),
                     'match_score': info.get('match_score'),
                     'confirmed_by': info.get('confirmed_by'),
@@ -239,13 +288,14 @@ def filter_variants(
                     # merge, which stores these as strings (matching the
                     # evt_rel_at convention elsewhere); mixing the two dtypes
                     # in the same parquet column breaks pyarrow on write.
-                    'variant_rel_at': str(variant_rel_at) if pd.notna(variant_rel_at) else None,
-                    'canonical_rel_at': str(canonical_rel_at) if pd.notna(canonical_rel_at) else None,
+                    'variant_rel_at': str(member_rel_at) if pd.notna(member_rel_at) else None,
+                    'canonical_rel_at': str(output_rel_at) if pd.notna(output_rel_at) else None,
                 })
         variant_map = pd.DataFrame(out_rows, columns=_VARIANT_MAP_COLUMNS)
 
-    variant_ids = set(variant_map['film_id']) if not variant_map.empty else set()
-    drop_ids = keyword_drop_ids | variant_ids
-    df_filtered = df[~df['film_id'].astype(int).isin(drop_ids)].copy() if drop_ids else df
+    drop_ids = keyword_drop_ids | df_drop_ids
+    df_filtered = df[~df['film_id'].astype(int).isin(drop_ids)].copy() if drop_ids else df.copy()
+    if relabel_map:
+        df_filtered['film_id'] = df_filtered['film_id'].astype(int).replace(relabel_map)
 
     return df_filtered, variant_map

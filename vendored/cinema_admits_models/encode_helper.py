@@ -603,7 +603,21 @@ class EncHelper:
 _VARIANT_STRIP = [
     # Format variants
     (re.compile(r"^3D[\s\-]+",                           re.I), ""),
-    (re.compile(r"^GC\s+",                               re.I), ""),
+    # GC (Gold Class) bookings sometimes carry an explicit hyphen after the
+    # prefix ("GC - Title", "GC -Title") as well as the plain "GC Title" form
+    # — the old `^GC\s+` only handled the latter, leaving a dangling "- " or
+    # "-" on the former that never matched the base title (found 2026-08-13:
+    # Deadpool and Wolverine, The Marvels, Indiana Jones and the Dial of
+    # Destiny, Avatar: The Way of Water, Guardians of the Galaxy Vol 3, Star
+    # Wars: Episode VII and ~15 others were all splitting into their own
+    # ungrouped "variant" instead of merging). Two alternatives rather than
+    # one lenient pattern deliberately: "whitespace, optionally a dash" or
+    # "a dash, optionally whitespace" — either requires an ACTUAL separator
+    # (space or dash) between "GC" and the title, so "GCTITLE" with no
+    # separator at all is never stripped (no real title is expected to start
+    # with the literal letters "GC", but there's no reason to risk it).
+    (re.compile(r"^GC(?:\s*[-–—]\s*|\s+)",               re.I), ""),
+    (re.compile(r"^BTQ[\s\-]+",                          re.I), ""),
     (re.compile(r"\s*[-–]\s*3D$",                        re.I), ""),
     (re.compile(r"\s*[-–]\s*IMAX(\s+3D)?$",              re.I), ""),
     (re.compile(r"\s+\(3D\)$",                           re.I), ""),

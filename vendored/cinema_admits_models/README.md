@@ -13,6 +13,19 @@ Re-vendored on: 2026-08-11 — upstream had added `strip_format_variant` /
 format-variant *admits* rows) which our copy predated; nothing else changed
 in either file (see `git diff --stat` at the time: only that ~100-line
 addition, plus the local import patch below).
+Re-vendored on: 2026-08-13 — fixed upstream `_VARIANT_STRIP` in
+`encode_helper.py`: the old `^GC\s+` pattern only stripped plain "GC Title"
+bookings, not the equally-common "GC - Title" / "GC -Title" forms, leaving a
+dangling "- " that never matched the base title (found while investigating
+why 62 real format-variant pairs — Deadpool and Wolverine, The Marvels,
+Indiana Jones and the Dial of Destiny, Avatar: The Way of Water, Guardians of
+the Galaxy Vol 3, Star Wars: Episode VII, and ~15 others — weren't grouping).
+Also added a `BTQ` prefix pattern (previously unrecognized entirely). Fixed
+62 → 7 mismatches; the remaining 7 are genuine internal-title punctuation
+inconsistencies (e.g. Spider-Man: Brand New Day's colon-vs-hyphen subtitle
+separator across its 4 booking variants) unrelated to prefix stripping —
+deliberately not auto-fixed, since blanket punctuation normalization risks
+merging genuinely distinct titles. Nothing else changed in either file.
 
 ## Files
 

@@ -962,21 +962,31 @@ async def _enrich_directors(new_directors: list[str]) -> None:
                     '_raw_output':   data.get('_raw_output'),
                 }
 
-        s3_checkpoint.append_checkpoint(DIRECTOR_S3_NAME, batch_success)
-        log.info(f"  Checkpoint delta saved: {len(batch_success)} directors "
-                 f"({len(checkpoint)} total so far)")
+        try:
+            s3_checkpoint.append_checkpoint(DIRECTOR_S3_NAME, batch_success)
+            log.info(f"  Checkpoint delta saved: {len(batch_success)} directors "
+                     f"({len(checkpoint)} total so far)")
+        except Exception as e:
+            # See _enrich_film_meta's identical guard.
+            log.error(f"  Checkpoint save failed ({e}) — stopping after batch {batch_num}/{len(chunks)}. "
+                      f"{len(checkpoint)} directors extracted so far will be flushed to parquet below; "
+                      f"re-authenticate (stax2aws login) and re-run to pick up any remainder.")
+            break
 
         if batch_errors or batch_success_keys:
-            existing_errors = s3_checkpoint.load_errors(DIRECTOR_S3_NAME)
-            purged_n = sum(1 for k in batch_success_keys
-                           if existing_errors.pop(k, None) is not None)
-            existing_errors.update(batch_errors)
-            if purged_n or batch_errors:
-                s3_checkpoint.save_errors(DIRECTOR_S3_NAME, existing_errors)
-            msg = f"  Errors this batch: {len(batch_errors)}"
-            if purged_n:
-                msg += f"  [purged {purged_n} now-recovered]"
-            log.info(msg)
+            try:
+                existing_errors = s3_checkpoint.load_errors(DIRECTOR_S3_NAME)
+                purged_n = sum(1 for k in batch_success_keys
+                               if existing_errors.pop(k, None) is not None)
+                existing_errors.update(batch_errors)
+                if purged_n or batch_errors:
+                    s3_checkpoint.save_errors(DIRECTOR_S3_NAME, existing_errors)
+                msg = f"  Errors this batch: {len(batch_errors)}"
+                if purged_n:
+                    msg += f"  [purged {purged_n} now-recovered]"
+                log.info(msg)
+            except Exception as e:
+                log.warning(f"  Errors-file save skipped ({e}) — successful extractions this batch are unaffected")
 
         if extractor.token_usage:
             curr  = extractor.token_usage.get('cost_usd', 0.0)
