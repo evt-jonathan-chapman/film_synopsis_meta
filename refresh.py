@@ -99,6 +99,20 @@ MIN_KNOWN_CAST_FOR_RETRY = 3
 # None to disable (pull the full historical catalogue back to 1935).
 WORK_SET_MIN_REL_DATE: pd.Timestamp | None = pd.Timestamp("2018-01-01", tz="UTC")
 
+# Recheck window for films whose budget/cast came back incomplete on first
+# extraction — see _films_due_for_recheck. A null budget outside this window
+# is treated as genuinely unavailable, not a timing gap: the null rate holds
+# flat at ~43-49% across every release year 2018-2025 with no downward trend,
+# so re-querying an old film is low-probability spend. The window is
+# deliberately asymmetric (short lookback, long lookahead) to weight rechecks
+# toward upcoming films, where a first extraction run months before release
+# is the common case that actually benefits from a second look.
+FILM_META_RECHECK_LOOKBACK_MONTHS = 2
+FILM_META_RECHECK_LOOKAHEAD_MONTHS = 6
+FILM_META_RECHECK_MIN_GAP_DAYS = 45
+FILM_META_RECHECK_MAX_CHECKS = 4
+FILM_META_RECHECK_EXCLUDED_TYPES = {"concert_film", "documentary"}
+
 # Local paths — no longer written by refresh.py itself (see s3_checkpoint.py;
 # all four extraction paths now read/write S3 directly, not local disk). Kept
 # defined and importable for main.py's own local-disk checkpoint logic and
@@ -633,9 +647,105 @@ def _drop_no_session_past_films(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _films_due_for_recheck(df_enriched: pd.DataFrame) -> set[int]:
+    """film_ids already in film_meta_enriched that should be re-extracted
+    despite already having a row, because they're incomplete on a
+    prediction-relevant field (null budget, or fewer than 3 of the top-5 cast
+    slots filled) and still inside their release-proximity window where a
+    recheck is likely to find something new.
+
+    Bounded three separate ways so this can never silently balloon into a
+    full re-extract:
+      - release window: only [-FILM_META_RECHECK_LOOKBACK_MONTHS,
+        +FILM_META_RECHECK_LOOKAHEAD_MONTHS] around today (see that
+        constant's comment for why the null rate outside this window isn't
+        worth paying web_search for).
+      - film-type filter: excludes concert_film/documentary (and the
+        is_concert flag) — these were never expected to carry a tracked
+        budget/cast in the first place, and genre-text matching for "sports"
+        is too noisy to use on its own (catches real biopics like I, Tonya
+        alongside genuine false positives like The Karate Kid), so it's
+        deliberately left out — most sports content never reaches this
+        parquet at all, filtered upstream by FILM_META_SKIP_DISTRIBUTORS.
+      - FILM_META_RECHECK_MAX_CHECKS cap + FILM_META_RECHECK_MIN_GAP_DAYS
+        floor — bounds both how many times and how often a single film can
+        be re-queried, independent of how long it sits inside the window.
+
+    Missing extracted_at/check_count (pre-migration legacy rows, or the
+    first run after this was added) are treated as "never checked" — eligible
+    immediately rather than silently exempt.
+    """
+    required_cols = {'evt_rel_at', 'budget_usd', 'cast', 'adaptation_type', 'is_concert', 'film_id'}
+    if df_enriched.empty or not required_cols.issubset(df_enriched.columns):
+        return set()
+
+    df = df_enriched.copy()
+    df['evt_rel_at'] = pd.to_datetime(df['evt_rel_at'], errors='coerce', utc=True)
+    now = pd.Timestamp.now(tz='UTC')
+    lo = now - pd.DateOffset(months=FILM_META_RECHECK_LOOKBACK_MONTHS)
+    hi = now + pd.DateOffset(months=FILM_META_RECHECK_LOOKAHEAD_MONTHS)
+    in_window = df['evt_rel_at'].between(lo, hi)
+
+    def _cast_patchy(c):
+        try:
+            return len(c) < 3
+        except TypeError:
+            return True
+
+    incomplete = df['budget_usd'].isna() | df['cast'].apply(_cast_patchy)
+
+    is_studio_film = ~df['adaptation_type'].isin(FILM_META_RECHECK_EXCLUDED_TYPES) & ~df['is_concert'].fillna(False)
+
+    if 'extracted_at' in df.columns:
+        extracted_at = pd.to_datetime(df['extracted_at'], errors='coerce', utc=True)
+        recently_checked = extracted_at.notna() & ((now - extracted_at).dt.days < FILM_META_RECHECK_MIN_GAP_DAYS)
+    else:
+        recently_checked = pd.Series(False, index=df.index)
+
+    if 'check_count' in df.columns:
+        under_cap = pd.to_numeric(df['check_count'], errors='coerce').fillna(0).astype(int) < FILM_META_RECHECK_MAX_CHECKS
+    else:
+        under_cap = pd.Series(True, index=df.index)
+
+    due = df.loc[in_window & incomplete & is_studio_film & ~recently_checked & under_cap, 'film_id']
+    return set(due.astype(int))
+
+
+def _film_meta_recheck_context() -> tuple[dict, pd.DataFrame | None, pd.DataFrame, set[int]]:
+    """Loads the film_meta checkpoint + parquet once and computes which
+    already-done film_ids are due for a recheck. Returns
+    (checkpoint dict, existing parquet-or-None, combined checkpoint+parquet
+    view, recheck film_ids) — shared by _diff_film_meta and _enrich_film_meta
+    so both agree on the same recheck set, and _enrich_film_meta can look up
+    a recheck candidate's prior check_count in `combined` to increment it
+    correctly rather than resetting it to 1.
+
+    checkpoint may hold deltas not yet folded into the parquet by
+    compact_checkpoint, so it wins over the parquet on any overlapping
+    film_id in `combined`.
+    """
+    checkpoint = s3_checkpoint.load_checkpoint(FILM_META_S3_NAME)
+    existing = s3_checkpoint.read_parquet(FILM_META_S3_NAME, FILM_META_FILENAME)
+
+    checkpoint_df = pd.DataFrame(checkpoint.values()) if checkpoint else pd.DataFrame(columns=['film_id'])
+    if not checkpoint_df.empty:
+        checkpoint_df['film_id'] = checkpoint_df['film_id'].astype(int)
+
+    if existing is not None and not existing.empty:
+        combined = pd.concat([existing, checkpoint_df], ignore_index=True).drop_duplicates(
+            subset='film_id', keep='last'
+        )
+    else:
+        combined = checkpoint_df
+
+    recheck_ids = _films_due_for_recheck(combined)
+    return checkpoint, existing, combined, recheck_ids
+
+
 def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) -> pd.DataFrame:
     """Films not yet in checkpoint JSON or enriched parquet, with skip-distributor
-    filter and re-release/variant merge applied.
+    filter and re-release/variant merge applied. Films that ARE already done but
+    are due for a recheck (see _films_due_for_recheck) are let back through too.
 
     Checks the checkpoint as well as the parquet so a partially-completed run (where
     the checkpoint has been written but the final parquet flush has not yet happened)
@@ -655,15 +765,17 @@ def _diff_film_meta(df_films: pd.DataFrame, film_lookup: pd.DataFrame | None) ->
 
     df = _apply_variant_merge(df, film_lookup)
 
-    done_ids: set[int] = set()
-    checkpoint = s3_checkpoint.load_checkpoint(FILM_META_S3_NAME)
-    done_ids |= {int(k) for k in checkpoint}
-    existing = s3_checkpoint.read_parquet(FILM_META_S3_NAME, FILM_META_FILENAME, columns=['film_id'])
+    checkpoint, existing, _combined, recheck_ids = _film_meta_recheck_context()
+    done_ids: set[int] = {int(k) for k in checkpoint}
     if existing is not None:
         done_ids |= set(existing['film_id'].astype(int))
 
-    df = df[~df['film_id'].astype(int).isin(done_ids)]
-    log.info(f"film_meta diff: {len(done_ids)} already done — {len(df)} to extract")
+    df = df[~df['film_id'].astype(int).isin(done_ids - recheck_ids)]
+    log.info(
+        f"film_meta diff: {len(done_ids)} already done "
+        f"({len(recheck_ids)} due for recheck — incomplete + in release window) — "
+        f"{len(df)} to extract"
+    )
 
     df = _drop_no_session_past_films(df)
     return df
@@ -758,15 +870,39 @@ async def _extract_synopses(df: pd.DataFrame) -> None:
             log.warning(f"{n_err} films had extraction errors — excluded")
         df_new = df_new[df_new['_error'].isna()].copy()
 
-    existing = s3_checkpoint.read_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)
-    if existing is not None:
-        out = (pd.concat([df_new, existing], ignore_index=True)
-               .drop_duplicates(subset='film_id', keep='first'))
-    else:
-        out = df_new
-    s3_checkpoint.write_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME, out)
-    log.info(f"Synopsis parquet → {s3_checkpoint.s3_uri(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)}  ({len(out)} total)")
-    _sync_synopsis_checkpoint(out)
+    # Unlike _enrich_cast/_enrich_directors/_enrich_film_meta (which checkpoint
+    # incrementally per-batch), synopsis extraction runs as one big batch and
+    # only touches S3 here, at the very end — so a failure on this read/write
+    # (e.g. an expired local Stax SSO session; local runs routinely take
+    # 1-2 hours, well past the 1-hour Stax session limit) would otherwise lose
+    # every already-extracted, already-paid-for synopsis in df_new with no way
+    # to recover them short of re-running the whole extraction. Dump df_new to
+    # a local recovery file first so a token-expiry mid-run is just an
+    # inconvenience, not lost work + wasted OpenAI spend.
+    try:
+        existing = s3_checkpoint.read_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)
+        if existing is not None:
+            out = (pd.concat([df_new, existing], ignore_index=True)
+                   .drop_duplicates(subset='film_id', keep='first'))
+        else:
+            out = df_new
+        s3_checkpoint.write_parquet(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME, out)
+        log.info(f"Synopsis parquet → {s3_checkpoint.s3_uri(SYNOPSIS_S3_NAME, SYNOPSIS_FILENAME)}  ({len(out)} total)")
+        _sync_synopsis_checkpoint(out)
+    except Exception:
+        recovery_path = (SYNOPSIS_CHECKPOINT_PATH.parent
+                          / f"synopsis_recovery_{datetime.datetime.now():%Y%m%d_%H%M%S}.parquet")
+        recovery_path.parent.mkdir(parents=True, exist_ok=True)
+        df_new.to_parquet(recovery_path, index=False)
+        log.error(
+            f"Failed to read/write the S3 synopsis checkpoint — saved the "
+            f"{len(df_new)} freshly-extracted film(s) to {recovery_path} so they "
+            f"aren't lost. If this was an expired Stax session, run "
+            f"`stax2aws login -i stax-au1 -o event` then merge this file in "
+            f"(e.g. via s3_checkpoint.read_parquet + concat + write_parquet) "
+            f"instead of re-running the extraction."
+        )
+        raise
 
     if extractor.token_usage:
         u = extractor.token_usage
@@ -1047,16 +1183,30 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
     if df.empty:
         return
 
-    checkpoint: dict = s3_checkpoint.load_checkpoint(FILM_META_S3_NAME)
+    checkpoint, existing, combined, recheck_ids = _film_meta_recheck_context()
     if checkpoint:
         log.info(f"Loaded film_meta checkpoint: {len(checkpoint)} films already done")
 
     done_ids = {int(k) for k in checkpoint}
-    df = df[~df['film_id'].astype(int).isin(done_ids)].copy()
-    log.info(f"film_meta: {len(done_ids)} in checkpoint — {len(df)} to extract")
+    if existing is not None:
+        done_ids |= set(existing['film_id'].astype(int))
+    df = df[~df['film_id'].astype(int).isin(done_ids - recheck_ids)].copy()
+    log.info(
+        f"film_meta: {len(done_ids)} in checkpoint "
+        f"({len(recheck_ids)} due for recheck) — {len(df)} to extract"
+    )
     if df.empty:
         log.info("film_meta enrichment up to date.")
         return
+
+    # Prior check_count per film_id, so a recheck increments rather than resets
+    # it — combined is the same checkpoint+parquet view _film_meta_recheck_context
+    # used to compute recheck_ids, kept here just for this lookup.
+    prev_check_count: dict[int, int] = (
+        combined.set_index('film_id')['check_count'].to_dict()
+        if not combined.empty and 'check_count' in combined.columns
+        else {}
+    )
 
     evt_passthrough = (
         df.set_index('film_id')[['dstbtr', 'rel_at']]
@@ -1102,6 +1252,9 @@ async def _enrich_film_meta(df: pd.DataFrame, film_lookup: pd.DataFrame | None) 
                 pt = evt_passthrough.get(film_id, {})
                 data['evt_dstbtr'] = str(pt.get('evt_dstbtr')) if pd.notna(pt.get('evt_dstbtr')) else None
                 data['evt_rel_at'] = str(pt.get('evt_rel_at')) if pd.notna(pt.get('evt_rel_at')) else None
+                prior_count = prev_check_count.get(film_id)
+                data['check_count'] = int(prior_count) + 1 if pd.notna(prior_count) else 1
+                data['extracted_at'] = pd.Timestamp.now(tz='UTC').isoformat()
                 checkpoint[str(film_id)] = data
                 batch_success[str(film_id)] = data
                 batch_success_ids.add(str(film_id))

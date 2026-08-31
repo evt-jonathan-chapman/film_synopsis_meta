@@ -12,9 +12,9 @@ tasks:
       You will be given a film TITLE, ESTIMATED RELEASE DATE, DIRECTOR
       (per EVT records), and the FIRST SENTENCE of EVT's stored synopsis.
       Use the web_search tool to consult authoritative sources — IMDb,
-      Letterboxd, Wikipedia, Box Office Mojo, The Numbers, Variety, Deadline,
-      official studio sites — and return a single JSON object matching this
-      exact schema:
+      Letterboxd, Wikipedia, The Movie Database (TMDB), Box Office Mojo, The
+      Numbers, Variety, Deadline, official studio sites — and return a single
+      JSON object matching this exact schema:
 
       {
         "title":            string,
@@ -90,6 +90,10 @@ tasks:
                         - Box office data sites: "Box Office Mojo", "The Numbers",
                           "Box Office Pro" — reliable for released films.
                         - "IMDb", "IMDbPro" — accept; widely used trade reference.
+                        - "TMDB" — accept; structured budget/revenue field on The
+                          Movie Database, populated for most films. Note in the
+                          confidence marker if TMDB's figure disagrees with another
+                          source you found.
                         - "Wikipedia (citing X)" — accept if Wikipedia attributes
                           to a named source X.
                         - "Studio press release" / "Producer interview" — accept if
@@ -193,14 +197,20 @@ tasks:
         just ONE. The per-call search fee dominates total cost — one good
         search is cheaper and almost as accurate as five narrower ones.
         Strategy:
-          1. FIRST search: target the canonical Wikipedia / IMDb page in one go
-             (e.g. '<title> <year> film Wikipedia'). Read the returned page(s)
-             and extract ALL fields from those results.
+          1. FIRST search: target the canonical Wikipedia / IMDb / TMDB page in
+             one go (e.g. '<title> <year> film Wikipedia TMDB'). TMDB's page
+             carries budget, revenue, cast, and studios as structured fields in
+             one place — check it alongside Wikipedia/IMDb, not as a fallback.
+             Read the returned page(s) and extract ALL fields from those results.
           2. SECOND search (only if needed): if the first search returned
-             nothing useful, OR if the budget figure is missing and the film is
-             a major studio release likely to be reported by trade press,
-             ONE more search targeting Variety / Deadline / The Numbers / Box
-             Office Mojo is permitted.
+             nothing useful, OR if the budget figure is still missing and the
+             film is a major studio release likely to be reported by trade
+             press, ONE more search targeting Variety / Deadline / The Numbers /
+             Box Office Mojo is permitted. Prefer this over TMDB for non-USD
+             productions — TMDB's budget field doesn't carry the original local
+             currency, so a Wikipedia/trade-press figure quoting e.g. "42 crore"
+             is more useful for budget_local/budget_currency than TMDB's
+             already-converted USD number.
         Do NOT do a third search. Do NOT search to verify single fields. If
         after two searches a field is still unknown, return null / [] / "unknown".
       - For unreleased films, return what is publicly announced; mark unverified
