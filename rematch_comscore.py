@@ -85,7 +85,7 @@ def pull_comscore() -> pd.DataFrame:
 def load_evt_films() -> pd.DataFrame:
     """EVT films work-set: full film_lookup catalogue (all EVT films, not just model subset)."""
     films = pd.read_parquet(
-        DATA_DIR / "look_ups" / "film_lookup.parquet",
+        DATA_DIR / "base_data" / "film_lookup.parquet",
         columns=["film_id", "film", "rel_at", "dstbtr"],
     ).drop_duplicates("film_id").reset_index(drop=True)
     n_null = films["film"].isna().sum()

@@ -143,9 +143,10 @@ def save_errors(name: str, errors: dict) -> None:
     _put_json(_client(), _errors_key(name), errors, indent=2)
 
 
-def read_parquet(name: str, filename: str, columns: "list[str] | None" = None) -> "pd.DataFrame | None":
+def read_parquet(name: str, filename: str, columns: "list[str] | None" = None,
+                  prefix: "str | None" = None) -> "pd.DataFrame | None":
     s3 = _client()
-    key = f"{S3_PREFIX}/{name}/{filename}"
+    key = f"{prefix if prefix is not None else S3_PREFIX}/{name}/{filename}"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
         return pd.read_parquet(io.BytesIO(obj["Body"].read()), columns=columns)
@@ -155,13 +156,13 @@ def read_parquet(name: str, filename: str, columns: "list[str] | None" = None) -
         raise
 
 
-def write_parquet(name: str, filename: str, df: pd.DataFrame) -> None:
+def write_parquet(name: str, filename: str, df: pd.DataFrame, prefix: "str | None" = None) -> None:
     s3 = _client()
-    key = f"{S3_PREFIX}/{name}/{filename}"
+    key = f"{prefix if prefix is not None else S3_PREFIX}/{name}/{filename}"
     buf = io.BytesIO()
     df.to_parquet(buf, engine="pyarrow", index=False)
     s3.put_object(Bucket=S3_BUCKET, Key=key, Body=buf.getvalue())
 
 
-def s3_uri(name: str, filename: str) -> str:
-    return f"s3://{S3_BUCKET}/{S3_PREFIX}/{name}/{filename}"
+def s3_uri(name: str, filename: str, prefix: "str | None" = None) -> str:
+    return f"s3://{S3_BUCKET}/{prefix if prefix is not None else S3_PREFIX}/{name}/{filename}"

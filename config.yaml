@@ -17,4 +17,5 @@ paths:
 s3:
     bucket:  "378682127617-data-science-prod"
     prefix:  "data/meta_data"
+    title_matching_prefix: "data/film_title_matching"
     profile: "stax-stax-au1-event"

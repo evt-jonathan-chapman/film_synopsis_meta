@@ -363,7 +363,7 @@ def load_full_film_catalogue() -> pd.DataFrame | None:
     """Full film catalogue for the re-release filter — reads film_lookup.parquet
     (same source as rematch_comscore.py::load_evt_films) so no Snowflake connection
     is required."""
-    path = DATA_DIR / "look_ups" / "film_lookup.parquet"
+    path = DATA_DIR / "base_data" / "film_lookup.parquet"
     try:
         full = pd.read_parquet(path, columns=["film_id", "film", "rel_at", "dstbtr", "director"])
         full = full[full["film"].notna()].reset_index(drop=True)

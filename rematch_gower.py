@@ -44,7 +44,7 @@ RANDOM_SEED = 42
 GOWER_MIN_REL_DATE = pd.Timestamp("2025-01-01", tz="UTC")
 
 _GW_COLS = [
-    "prmry_title_no", "title", "rel_date", "snapshot_date",
+    "prim_title_no", "title", "rel_date", "snapshot_date",
     "snapshot_type", "life_time_base",
 ]
 

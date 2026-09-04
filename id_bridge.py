@@ -10,18 +10,25 @@ outer-join on film_id, no additional matching logic of its own.
 Read film_id_bridge.parquet, not the two matcher caches directly, when all
 you need is the film_id -> cs_id / gower_id crosswalk.
 
-Output: DATA_DIR/title_matching/id_bridge/film_id_bridge.parquet
+Output: DATA_DIR/title_matching/id_bridge/film_id_bridge.parquet, mirrored to
+S3 at S3_TITLE_MATCHING_PREFIX/id_bridge/film_id_bridge.parquet (same
+best-effort mirror pattern as title_matcher.py::FuzzyTitleMatcher._sync_to_s3
+— the local file stays authoritative for this and every other caller in this
+repo; the S3 copy is for other consumers).
 """
 
 import os
 import pandas as pd
 
-from config import DATA_DIR
+import s3_checkpoint
+from config import DATA_DIR, S3_BUCKET, S3_TITLE_MATCHING_PREFIX
 from comscore_matcher import ComscoreMatcher
 from gower_matcher import GowerMatcher
 
 ID_BRIDGE_DIR  = DATA_DIR / "title_matching" / "id_bridge"
 ID_BRIDGE_PATH = str(ID_BRIDGE_DIR / "film_id_bridge.parquet")
+ID_BRIDGE_S3_NAME     = "id_bridge"
+ID_BRIDGE_S3_FILENAME = "film_id_bridge.parquet"
 
 _CS_COLS = ["film_id", "film", "cs_id", "cs_title", "match_confidence"]
 _GW_COLS = ["film_id", "film", "gower_id", "gower_title", "match_confidence"]
@@ -51,6 +58,16 @@ def build_id_bridge() -> dict:
 
     os.makedirs(ID_BRIDGE_DIR, exist_ok=True)
     bridge.to_parquet(ID_BRIDGE_PATH, index=False)
+
+    if S3_BUCKET:
+        try:
+            s3_checkpoint.write_parquet(ID_BRIDGE_S3_NAME, ID_BRIDGE_S3_FILENAME, bridge,
+                                         prefix=S3_TITLE_MATCHING_PREFIX)
+            print(f"Synced to S3: "
+                  f"{s3_checkpoint.s3_uri(ID_BRIDGE_S3_NAME, ID_BRIDGE_S3_FILENAME, prefix=S3_TITLE_MATCHING_PREFIX)}")
+        except Exception as e:
+            print(f"[warn] S3 sync skipped for id_bridge ({e}) — "
+                  f"local {ID_BRIDGE_PATH} is unaffected and still authoritative")
 
     n_both      = (bridge["cs_id"].notna() & bridge["gower_id"].notna()).sum()
     n_cs_only   = (bridge["cs_id"].notna() & bridge["gower_id"].isna()).sum()

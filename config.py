@@ -35,6 +35,14 @@ S3_BUCKET  = _cfg.get('s3', {}).get('bucket')
 S3_PREFIX  = _cfg.get('s3', {}).get('prefix', '')
 S3_PROFILE = _cfg.get('s3', {}).get('profile')
 
+# Separate prefix (sibling to S3_PREFIX's "meta_data" under the shared "data/"
+# root, not nested under S3_PREFIX itself) for the Comscore/Gower/id_bridge
+# title-matching outputs — these still write their local parquet caches first
+# (title_matcher.py's incremental skip-if-matched logic needs a persistent
+# local cache between runs), then mirror the final result to S3 under this
+# prefix for other consumers.
+S3_TITLE_MATCHING_PREFIX = _cfg.get('s3', {}).get('title_matching_prefix', 'film_title_matching')
+
 # ── Data paths (all under main_dir) ───────────────────────────────────────────
 _synopsis_dir = _cfg['paths']['synopsis_dir']
 _cast_dir     = _cfg['paths']['cast_dir']

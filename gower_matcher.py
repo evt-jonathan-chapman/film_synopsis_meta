@@ -7,13 +7,13 @@ film_id. Same fuzzy-title engine as comscore_matcher.py::ComscoreMatcher
 supplies Gower's column names and output paths.
 
 Gower is thinner than Comscore: one title column (no aka/us_title/short_name
-variants) and no title_global_id-style key — `prmry_title_no` is the
+variants) and no title_global_id-style key — `prim_title_no` is the
 closest thing to a stable per-title identifier, so it's used as ID_COL.
 There's no is_alt_content-style flag either, so ALT_CONTENT_COL is left None.
 
 The SQL extract (sql/gower_export.sql) returns up to three snapshot rows per
 title (`snapshot_type` in latest/1m_pre_release/3m_pre_release) — one title
-can therefore appear several times with the same prmry_title_no. _prep_source
+can therefore appear several times with the same prim_title_no. _prep_source
 picks the 'latest' snapshot row (falling back to 1m/3m pre-release) before
 the shared dedup-by-ID_COL logic runs, so scoring only ever sees one row per
 title.
@@ -47,7 +47,7 @@ class GowerMatcher(FuzzyTitleMatcher):
     # Lower-cased by SnowFlakeBase.return_query_output, so use lowercase here.
     TITLE_COLS = ["title"]
     DATE_COL   = "rel_date"
-    ID_COL     = "prmry_title_no"
+    ID_COL     = "prim_title_no"
     ALT_CONTENT_COL = None
 
     # Cache/review/override column names — "gower_" prefix mirrors Comscore's
@@ -59,7 +59,7 @@ class GowerMatcher(FuzzyTitleMatcher):
     MATCHED_TITLE_FIELD  = "matched_gower_title"
 
     def _prep_source(self, src_df):
-        """Pick one row per prmry_title_no before the shared dedup runs —
+        """Pick one row per prim_title_no before the shared dedup runs —
         prefer 'latest' snapshot, then 1m/3m pre-release, over anything else."""
         src = src_df.copy()
         if "snapshot_type" in src.columns:

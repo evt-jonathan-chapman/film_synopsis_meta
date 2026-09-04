@@ -31,6 +31,9 @@ import re
 import unicodedata
 import pandas as pd
 
+import s3_checkpoint
+from config import S3_BUCKET, S3_TITLE_MATCHING_PREFIX
+
 try:
     from rapidfuzz import fuzz as _rf_fuzz
     _USE_RAPIDFUZZ = True
@@ -143,10 +146,11 @@ class FuzzyTitleMatcher:
                      source extract on the ID column when you need value
                      columns).
         """
-        self.match_thresh = match_thresh
-        self.carry_cols   = carry_cols or []
-        self.mapping_df   = None
-        self._cache       = self._load_cache()
+        self.match_thresh  = match_thresh
+        self.carry_cols    = carry_cols or []
+        self.mapping_df    = None
+        self._cache        = self._load_cache()
+        self._last_review_df = None
 
     # ── Cache column schema (built from subclass field names) ────────────────
 
@@ -199,7 +203,7 @@ class FuzzyTitleMatcher:
         return ' '.join(s.split()).lower().strip()
 
     @classmethod
-    def _score(cls, a, b):
+    def _score(cls, a, b, allow_subset: bool = True):
         a_n = cls._normalise_title(a)
         b_n = cls._normalise_title(b)
         if not a_n or not b_n:
@@ -208,45 +212,68 @@ class FuzzyTitleMatcher:
         if min(la, lb) / max(la, lb) < cls.MIN_LENGTH_RATIO:
             return 0.0
         if _USE_RAPIDFUZZ:
-            return max(
+            candidates = [
                 _rf_fuzz.ratio(a_n, b_n),
                 _rf_fuzz.token_sort_ratio(a_n, b_n),
-                # token_set_ratio handles "X presents Y" vs "X: Y" (Hobbs & Shaw pattern)
-                # where one side has an extra connective word not in the other.
-                _rf_fuzz.token_set_ratio(a_n, b_n),
-            ) / 100.0
+            ]
+            if allow_subset:
+                # token_set_ratio handles "X presents Y" vs "X: Y" (Hobbs & Shaw
+                # pattern) where one side has an extra connective word not in
+                # the other — gives full credit when one title's words are a
+                # subset of the other's. Only safe for two FULL titles being
+                # compared as-is: allow_subset=False is passed for colon-split
+                # fragments (see _article_variants), where the "subset" is a
+                # deliberately truncated piece of the EVT title (e.g. "NT
+                # LIVE" from "NT LIVE: VANYA") — subset-crediting that against
+                # an untruncated source title like "NT Live: Hamlet" scores a
+                # false 100: the extra words on the source side ("Hamlet") are
+                # exactly what should have disqualified the match, not been
+                # forgiven.
+                candidates.append(_rf_fuzz.token_set_ratio(a_n, b_n))
+            return max(candidates) / 100.0
         return SequenceMatcher(None, a_n, b_n).ratio()
 
     @staticmethod
-    def _article_variants(title: str) -> list[str]:
-        """Return article-transposed and colon-split forms to broaden matching coverage."""
-        variants = [title]
+    def _article_variants(title: str) -> list[tuple[str, bool]]:
+        """Return (variant, is_truncated) pairs: article-transposed and
+        colon-split forms to broaden matching coverage. is_truncated=True for
+        the colon-split fragments, which drop part of the original title's
+        content — callers should compare those with allow_subset=False (see
+        _score) since they're missing real, potentially-distinguishing words
+        rather than just being reworded/reordered."""
+        variants = [(title, False)]
         t = title.strip()
         upper = t.upper()
         # "THE X" / "A X" / "AN X"  →  "X, THE" / "X, A" / "X, AN"
         for article in ('THE ', 'A ', 'AN '):
             if upper.startswith(article):
                 rest = t[len(article):]
-                variants.append(f"{rest}, {article.strip()}")
+                variants.append((f"{rest}, {article.strip()}", False))
                 break
         # "X, THE" / "X, A" / "X, AN"  →  "THE X" / "A X" / "AN X"
         for article in (', THE', ', A', ', AN'):
             if upper.endswith(article):
                 rest = t[:-len(article)]
-                variants.append(f"{article[2:]} {rest}")
+                variants.append((f"{article[2:]} {rest}", False))
                 break
         # Colon-split variants: sources often omit either the subtitle
         # ("Peter Rabbit 2: The Runaway" → "Peter Rabbit 2") or the franchise
         # prefix ("Star Wars: The Mandalorian and Grogu" → "The Mandalorian and
         # Grogu"). Both sides are tried; MIN_LENGTH_RATIO in _score() suppresses
-        # short fragments that can't meaningfully match.
+        # short fragments that can't meaningfully match. Marked truncated so
+        # _score() won't give them token_set_ratio's subset forgiveness.
         if ': ' in t:
             pre, post = t.split(': ', 1)
             if pre.strip():
-                variants.append(pre.strip())
+                variants.append((pre.strip(), True))
             if post.strip():
-                variants.append(post.strip())
-        return list(dict.fromkeys(variants))  # deduplicate, preserve order
+                variants.append((post.strip(), True))
+        seen, out = set(), []
+        for v, trunc in variants:
+            if v not in seen:
+                seen.add(v)
+                out.append((v, trunc))
+        return out
 
     # ── Source prep ───────────────────────────────────────────────────────────
 
@@ -270,6 +297,11 @@ class FuzzyTitleMatcher:
                   f"{len(src):,} unique titles")
 
         src["_release_date"] = pd.to_datetime(src[self.DATE_COL], errors="coerce")
+        # Strip tz so the days_diff arithmetic doesn't fight tz-naive EVT dates
+        # (build_mapping strips tz from _evt_date the same way) — some Snowflake
+        # extracts return tz-aware timestamps for this column, others don't.
+        if hasattr(src["_release_date"], "dt") and src["_release_date"].dt.tz is not None:
+            src["_release_date"] = src["_release_date"].dt.tz_convert(None)
         src["_year"]         = src["_release_date"].dt.year
         return src
 
@@ -285,8 +317,8 @@ class FuzzyTitleMatcher:
             best_value = ""
             for col in self.TITLE_COLS:
                 val = cr.get(col, "") or ""
-                for variant in evt_variants:
-                    s = self._score(variant, val)
+                for variant, is_truncated in evt_variants:
+                    s = self._score(variant, val, allow_subset=not is_truncated)
                     if s > best_score:
                         best_score = s
                         best_col   = col
@@ -318,10 +350,22 @@ class FuzzyTitleMatcher:
             return record
 
         src_id, best_score, matched_value, matched_col, _best_year, best_days, src_row = scored[0]
-        is_high = (
-            best_score >= self.HIGH_CONFIDENCE_SCORE
-            and (best_days <= self.MAX_DAYS_HIGH_CONF or best_days == 9999)
-        )
+
+        # A title match this far from the EVT release date is very likely a
+        # different release entirely (a sequel/remake/re-release sharing the
+        # base title, e.g. FROZEN vs Frozen 3, THE WOLF MAN vs Wolf Man) —
+        # reject outright rather than just demoting out of "high", so it
+        # doesn't linger in the review file looking like a plausible
+        # candidate regardless of text score. Manual overrides
+        # (confidence_label="manual") are exempt — that's an explicit human
+        # decision, not something this heuristic should second-guess.
+        if confidence_label is None and best_days != 9999 and best_days > self.MAX_DAYS_HIGH_CONF:
+            record["match_score"]      = round(best_score, 3)
+            record["match_confidence"] = "unmatched"
+            record["days_diff"]        = best_days
+            return record
+
+        is_high = best_score >= self.HIGH_CONFIDENCE_SCORE
         record.update({
             self.ID_FIELD:        src_id,
             self.TITLE_FIELD:     src_row.get(self.TITLE_COLS[0], ""),  # canonical title
@@ -451,6 +495,95 @@ class FuzzyTitleMatcher:
                   f"(base: {base!r})")
 
         return n_propagated
+
+    # ── Exclusivity: one source row shouldn't back two unrelated EVT films ───
+
+    def _resolve_duplicate_claims(self, films: pd.DataFrame, src: pd.DataFrame,
+                                   max_rounds: int = 5) -> int:
+        """
+        Each EVT film independently picks its own best-scoring source row, so
+        nothing stops two genuinely different films from both landing on the
+        same source row (e.g. "PROJECT X" and "PROJECT HAIL MARY" both
+        scoring against Gower's "Project Hail Mary" — the exact match should
+        win and the impostor should look elsewhere). Rows that legitimately
+        share a source ID on purpose (format/language variants of the same
+        EVT film — matched independently here, not via _propagate_variants,
+        e.g. 5 language-dub bookings of the same title) are left alone: they
+        share a common _strip_variant base title with each other.
+
+        For every source ID claimed by ≥2 films with *different* base
+        titles, keep the best claim (confidence, then score, then days_diff)
+        and re-score every other claimant against the source pool with that
+        ID removed. Iterates (bounded by max_rounds) because bumping a loser
+        to its next-best candidate can create a new collision with a
+        different winner — this is what makes it "iterative": a chain of
+        collisions resolves one link at a time.
+
+        A film that loses a contested ID is permanently banned from
+        reclaiming that same ID for the rest of this call (across rounds),
+        not just excluded from it for the one re-score that just bumped it.
+        Without that, two source rows that are themselves near-duplicates
+        (e.g. Gower carrying two rows for what's really the same title) can
+        make two films volley back and forth between them every round —
+        each round's from-scratch conflict scan has no memory of what was
+        already tried, so it can re-propose the exact swap that caused the
+        previous round's collision. The per-film ban set makes forward
+        progress monotonic: each bounce permanently shrinks that film's
+        remaining candidate pool, so it can only cycle a finite number of
+        times before settling (possibly on "unmatched") rather than
+        oscillating for the full max_rounds.
+        """
+        evt_idx = films.set_index("film_id")
+        conf_rank = {"manual": 0, "high": 1, "borderline": 2}
+        total_reassigned = 0
+        banned: dict = {}  # film_id -> set of source IDs it's already lost
+
+        for _ in range(max_rounds):
+            in_scope = self._cache[
+                self._cache["film_id"].isin(films["film_id"])
+                & self._cache["match_confidence"].isin(["manual", "high", "borderline"])
+            ]
+            any_conflict = False
+
+            for src_id, group in in_scope.groupby(self.ID_FIELD):
+                if pd.isna(src_id) or len(group) < 2:
+                    continue
+                bases = group["film"].apply(self._strip_variant).unique()
+                if len(bases) <= 1:
+                    continue  # same film's own format/language variants — fine to share
+
+                any_conflict = True
+                ranked = group.assign(
+                    _conf_rank=group["match_confidence"].map(conf_rank).fillna(3)
+                ).sort_values(
+                    ["_conf_rank", "match_score", "days_diff"],
+                    ascending=[True, False, True],
+                )
+                loser_ids = ranked["film_id"].iloc[1:]
+
+                for fid in loser_ids:
+                    if fid not in evt_idx.index:
+                        continue
+                    banned.setdefault(fid, set()).add(src_id)
+                    title    = evt_idx.at[fid, "film"]
+                    evt_date = evt_idx.at[fid, "_evt_date"]
+                    remaining_src = src[~src[self.ID_COL].isin(banned[fid])]
+                    rescored = self._score_candidates(title, evt_date, remaining_src)
+                    new_record = self._build_record(fid, title, rescored)
+                    self._cache = (
+                        pd.concat([self._cache, pd.DataFrame([new_record])], ignore_index=True)
+                        .drop_duplicates("film_id", keep="last")
+                    )
+                    total_reassigned += 1
+                    print(f"  [conflict] {title!r} lost {self.ID_FIELD}={src_id} to "
+                          f"{ranked.iloc[0]['film']!r} → "
+                          f"re-matched to {new_record.get(self.ID_FIELD)!r} "
+                          f"({new_record['match_confidence']})")
+
+            if not any_conflict:
+                break
+
+        return total_reassigned
 
     # ── Manual overrides (highest precedence) ────────────────────────────────
 
@@ -631,12 +764,22 @@ class FuzzyTitleMatcher:
             self._save_cache()
             print(f"Variant propagation: {n_variant} film(s) assigned from base title.")
 
+        # 5. Resolve source rows independently claimed by unrelated EVT films
+        #    (e.g. "PROJECT X" and "PROJECT HAIL MARY" both matching Gower's
+        #    "Project Hail Mary") — the best claim wins, losers are re-matched
+        #    against the remaining pool.
+        n_reassigned = self._resolve_duplicate_claims(films, src)
+        if n_reassigned:
+            self._save_cache()
+            print(f"Conflict resolution: {n_reassigned} film(s) re-matched off a contested source row.")
+
         self.mapping_df = (
             self._cache[self._cache["film_id"].isin(films["film_id"])]
             .copy()
             .reset_index(drop=True)
         )
         self._write_review_file(films, review_candidates)
+        self._sync_to_s3()
 
         conf = self.mapping_df["match_confidence"].fillna("legacy").value_counts().to_dict()
         print(f"\nConfidence breakdown (this run's scope): {conf}")
@@ -651,6 +794,7 @@ class FuzzyTitleMatcher:
         review = cache[needs_review & in_scope].copy()
         if review.empty:
             print("Review file: nothing borderline/unmatched in scope — skipping write")
+            self._last_review_df = None
             return
 
         override_col = f"manual_override_{self.ID_FIELD}"
@@ -700,6 +844,36 @@ class FuzzyTitleMatcher:
         n_bd = (out["current_match_confidence"] == "borderline").sum()
         print(f"Review file → {self.REVIEW_PATH}  ({n_un} unmatched, {n_bd} borderline). "
               f"Fill {override_col} and save as {self.MANUAL_OVERRIDES_CSV} to apply on next run.")
+        self._last_review_df = out
+
+    # ── Mirror local cache/review outputs to S3 ───────────────────────────────
+
+    def _sync_to_s3(self):
+        """Best-effort copy of the local cache (+ review file, if one was just
+        written) to S3, under S3_TITLE_MATCHING_PREFIX/{name}/ — a sibling
+        prefix to the LLM extraction paths' S3_PREFIX, not nested under it.
+        The local parquet under CACHE_PATH/REVIEW_PATH stays authoritative
+        (title_matcher's skip-if-already-matched logic reads it back on the
+        next run); this is purely a mirror for other consumers. Never raises
+        — a transient credentials/network issue here shouldn't undo a
+        successful local matching run."""
+        if not S3_BUCKET:
+            return
+        name = self.SOURCE_LABEL.lower()
+        try:
+            cache_filename = os.path.basename(self.CACHE_PATH)
+            s3_checkpoint.write_parquet(name, cache_filename, self._cache,
+                                         prefix=S3_TITLE_MATCHING_PREFIX)
+            uris = [s3_checkpoint.s3_uri(name, cache_filename, prefix=S3_TITLE_MATCHING_PREFIX)]
+            if self._last_review_df is not None:
+                review_filename = os.path.basename(self.REVIEW_PATH)
+                s3_checkpoint.write_parquet(name, review_filename, self._last_review_df,
+                                             prefix=S3_TITLE_MATCHING_PREFIX)
+                uris.append(s3_checkpoint.s3_uri(name, review_filename, prefix=S3_TITLE_MATCHING_PREFIX))
+            print(f"Synced to S3: {', '.join(uris)}")
+        except Exception as e:
+            print(f"[warn] S3 sync skipped for {self.SOURCE_LABEL} ({e}) — "
+                  f"local {self.CACHE_PATH} is unaffected and still authoritative")
 
     # ── Re-score the existing cache against the current algorithm/data ───────
 
@@ -810,5 +984,17 @@ class FuzzyTitleMatcher:
             films_df = self._cache[["film_id", "film"]].copy()
             films_df["rel_at"] = None
             films_df["dstbtr"] = None
+
+        if "_evt_date" not in films_df.columns:
+            films_df["_evt_date"] = pd.to_datetime(films_df.get("rel_at"), errors="coerce")
+            if films_df["_evt_date"].dt.tz is not None:
+                films_df["_evt_date"] = films_df["_evt_date"].dt.tz_convert(None)
+
+        n_reassigned = self._resolve_duplicate_claims(films_df, src)
+        if n_reassigned:
+            self._save_cache()
+            print(f"Conflict resolution: {n_reassigned} film(s) re-matched off a contested source row.")
+
         self._write_review_file(films_df, review_candidates)
+        self._sync_to_s3()
         return self
