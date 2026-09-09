@@ -49,7 +49,18 @@ except ImportError:
 _VARIANT_STRIP = [
     # Format prefixes
     (re.compile(r"^3D[\s\-]+",                            re.I), ""),
-    (re.compile(r"^GC\s+",                                re.I), ""),
+    # GC (Gold Class) bookings sometimes carry an explicit hyphen after the
+    # prefix ("GC - Title", "GC -3D Title") as well as the plain "GC Title"
+    # form — matches the 2026-08-13 fix already applied upstream in
+    # vendored/cinema_admits_models/encode_helper.py (this copy had drifted
+    # and was still missing it, causing e.g. "GC -3D DOCTOR STRANGE IN THE
+    # MULTIVERSE OF MADNESS" to not reduce to the base title at all). Also
+    # swallows a directly-following "3D" tag in the same pass — patterns
+    # here are applied once each, left to right (not iteratively), so by the
+    # time this pattern runs, the earlier standalone "^3D" pattern has
+    # already had its one shot and won't see the "3D" this GC strip exposes.
+    (re.compile(r"^GC(?:\s*[-–—]\s*|\s+)(?:3D[\s\-]+)?",  re.I), ""),
+    (re.compile(r"^BTQ[\s\-]+",                           re.I), ""),
     # Format suffixes
     (re.compile(r"\s*[-–]\s*3D$",                         re.I), ""),
     (re.compile(r"\s*[-–]\s*IMAX(\s+3D)?$",               re.I), ""),
@@ -63,10 +74,21 @@ _VARIANT_STRIP = [
     (re.compile(r"\s*[-–]\s*EVENT\s+CINEMA$",             re.I), ""),
     (re.compile(r"\s*[-–]\s*BONUS\s+CONTENT$",            re.I), ""),
     (re.compile(r"\s*[-–]\s*SING[\s\-]?ALONG$",           re.I), ""),
-    (re.compile(r"\s*[-–]\s*SPECIAL\s+Q\s+AND\s+A.*$",    re.I), ""),
+    # "SPECIAL" is optional — EVT titles carry both "- SPECIAL Q AND A ..."
+    # and the plain "- Q AND A SCREENING" form (found 2026-09-09: "THE
+    # BREAKER UPPERERS - Q AND A SCREENING" wasn't reducing to its base title).
+    (re.compile(r"\s*[-–]\s*(?:SPECIAL\s+)?Q\s+AND\s+A.*$", re.I), ""),
     (re.compile(r"\s*[-–]\s*BLOCK\s+PARTY\s+EDITION!?$",  re.I), ""),
     (re.compile(r":\s*THE\s+VALENTINE\s+ENCORE$",         re.I), ""),
-    # Festival / distributor programme prefixes
+    # Festival / distributor programme prefixes. Numbered codes (NZIFF/BIFF/
+    # FFFA/IFF) carry a 2-digit year suffix that varies release to release
+    # (e.g. "NZIFF18:", "BIFF25", "FFFA26") — \d{0,3} absorbs it. Requires an
+    # actual separator (colon, or whitespace/dash) after the code+digits so
+    # "IFFY MOVIE" or similar can never be mistaken for the "IFF" prefix.
+    # Found 2026-09-09 while investigating _resolve_duplicate_claims
+    # wrongly treating "NZIFF18: THE GUILTY"/"THE GUILTY", "SSF - JULIET
+    # NAKED"/"NZIFF18: JULIET NAKED" etc. as unrelated films.
+    (re.compile(r"^(?:NZIFF|BIFF|FFFA|IFF|SSF)\d{0,3}(?:\s*:\s*|[\s\-–]+)", re.I), ""),
     (re.compile(r"^(?:TFF|FFF|MIFF|CFF|MF)\s*[-–]?\s+",  re.I), ""),
     # Event/tour suffixes used by EVT that Comscore doesn't carry
     (re.compile(r"\s*[-–]\s*RE[\s\-]?RELEASE$",           re.I), ""),
