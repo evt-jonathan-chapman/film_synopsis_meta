@@ -108,7 +108,7 @@ WORK_SET_MIN_REL_DATE: pd.Timestamp | None = pd.Timestamp("2018-01-01", tz="UTC"
 # toward upcoming films, where a first extraction run months before release
 # is the common case that actually benefits from a second look.
 FILM_META_RECHECK_LOOKBACK_MONTHS = 2
-FILM_META_RECHECK_LOOKAHEAD_MONTHS = 6
+FILM_META_RECHECK_LOOKAHEAD_MONTHS = 4
 FILM_META_RECHECK_MIN_GAP_DAYS = 45
 FILM_META_RECHECK_MAX_CHECKS = 4
 FILM_META_RECHECK_EXCLUDED_TYPES = {"concert_film", "documentary"}
