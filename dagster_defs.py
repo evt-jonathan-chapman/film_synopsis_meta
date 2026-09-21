@@ -88,39 +88,13 @@ def merged_film_data() -> dict:
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
-nightly_job = define_asset_job(
-    "nightly_job",
-    selection=AssetSelection.assets(films_source, synopsis, cast, directors),
+full_refresh_job = define_asset_job(
+	"full_refresh_job", 
+	selection=[films_source, synopsis, cast, directors, film_meta, merged_film_data]
 )
-
-film_meta_job = define_asset_job(
-    "film_meta_job",
-    selection=AssetSelection.assets(films_source, film_meta),
-)
-
-merged_film_data_job = define_asset_job(
-    "merged_film_data_job",
-    selection=AssetSelection.assets(merged_film_data),
-)
-
-full_refresh_job = define_asset_job("full_refresh_job", selection="*")
-
-
 # ── Schedules ─────────────────────────────────────────────────────────────────
-
-nightly_schedule = ScheduleDefinition(
-    job=nightly_job,
-    cron_schedule="0 2 * * *",      # 02:00 daily
-)
-
-film_meta_schedule = ScheduleDefinition(
-    job=film_meta_job,
-    cron_schedule="0 3 * * 0",      # 03:00 Sundays
-)
-
 
 defs = Definitions(
     assets=[films_source, synopsis, cast, directors, film_meta, merged_film_data],
-    jobs=[nightly_job, film_meta_job, merged_film_data_job, full_refresh_job],
-    schedules=[nightly_schedule, film_meta_schedule],
+    jobs=[full_refresh_job]
 )
